@@ -29,18 +29,18 @@ import estadosRoutes from "./routes/estados.js";
 
 
 //import startDailyAlert from "./jobs/dailyAlert.js";
-//import "./jobs/fixOfflineUpdatesJob.js";
+import "./jobs/fixOfflineUpdatesJob.js";
 import { initCronJobs } from "./jobs/distibucionAlert.js";
 import { initScheduledTaskJob } from "./jobs/scheduledTaskJob.js";
 import { tareaCodigosQuemables } from "./jobs/tareaCodigosQuemables.js";
 import { totemsStatusJob } from "./jobs/totemsStatusJob.js";
 import { iniciarVendedorScheduler } from "./jobs/vendedorScheduler.js";
 
-//initScheduledTaskJob();
-//initCronJobs();
-//tareaCodigosQuemables();
-//totemsStatusJob();
-//iniciarVendedorScheduler();
+initScheduledTaskJob();
+initCronJobs();
+tareaCodigosQuemables();
+totemsStatusJob();
+iniciarVendedorScheduler();
 
 // Create server
 const app = express();
