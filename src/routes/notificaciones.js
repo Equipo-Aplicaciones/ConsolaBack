@@ -57,9 +57,7 @@ router.get("/", async (req, res) => {
         .whereIn("url", urlsPermitidas)
         .orderBy("created_at", "desc");
 
-    res.json(notificaciones);
-    console.log(notificaciones);
-    
+    res.json(notificaciones); 
 
   } catch (error) {
     res.status(500).json({
