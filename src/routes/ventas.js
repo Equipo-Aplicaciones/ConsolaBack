@@ -21,7 +21,7 @@ function obtenerDiaSemana() {
 
 router.use(requireAuth);
 
-router.get("/ventas-diarias", allowRoles("Admin","Zonal","Comercial"), async (req, res) => {
+router.get("/ventas-diarias", allowRoles("Admin","N2","Zonal","Comercial"), async (req, res) => {
 
   try {
 
@@ -30,7 +30,7 @@ router.get("/ventas-diarias", allowRoles("Admin","Zonal","Comercial"), async (re
     /* 1️⃣ OBTENER LOCALES */
 
     let connectionsQuery = mgmtDb("connections")
-      .select("name", "host", "codLocal").where("empresa_id",2);
+      .select("name", "host", "codLocal").where("empresa_id",2).andWhere("activo",true);
 
     // Si es zonal filtrar por su usuario
     if (user.role === "Zonal") {
@@ -129,20 +129,14 @@ router.get("/ventas-diarias", allowRoles("Admin","Zonal","Comercial"), async (re
 
 });
 
-router.get(
-  "/estado-horario",
-  allowRoles("Admin"),
-  async (req, res) => {
+router.get( "/estado-horario", allowRoles("Admin", "N2"), async (req, res) => {
     try {
 
       /* =====================================================
          EMPRESA
       ===================================================== */
 
-      const empresaSeleccionada = Number(
-        req.query.empresa_id || 1
-      );
-
+      const empresaSeleccionada = Number( req.query.empresa_id || 1 );
       const mapaEmpresas = {
         1: {
           sqlServer: "QA",
@@ -155,8 +149,7 @@ router.get(
         }
       };
 
-      const empresaConfig =
-        mapaEmpresas[empresaSeleccionada];
+      const empresaConfig = mapaEmpresas[empresaSeleccionada];
 
       if (!empresaConfig) {
         return res.status(400).json({
@@ -164,10 +157,7 @@ router.get(
         });
       }
 
-      const {
-        sqlServer,
-        empresaInternaId
-      } = empresaConfig;
+      const { sqlServer, empresaInternaId } = empresaConfig;
 
 
       /* =====================================================
@@ -175,10 +165,7 @@ router.get(
       ===================================================== */
 
       const normalizarCodLocal = (valor) => {
-        if (
-          valor === null ||
-          valor === undefined
-        ) {
+        if ( valor === null || valor === undefined ) {
           return null;
         }
 
@@ -197,16 +184,8 @@ router.get(
       ===================================================== */
 
       const conexiones = await mgmtDb("connections")
-        .where(
-          "empresa_id",
-          empresaInternaId
-        )
-        .select(
-          "id",
-          "codLocal",
-          "name",
-          "activo"
-        );
+        .where("empresa_id",empresaInternaId)
+        .select("id", "codLocal", "name", "activo");
 
 
       /* =====================================================
@@ -234,10 +213,7 @@ router.get(
          SQL SERVER
       ===================================================== */
 
-      const pool =
-        await getSqlServerPool(
-          sqlServer
-        );
+      const pool = await getSqlServerPool( sqlServer );
 
 
       /* =====================================================
@@ -321,22 +297,13 @@ router.get(
               GETDATE()
             ) BETWEEN 11 AND 59
               THEN 'Demora leve'
-
             ELSE 'Critica'
-
           END AS estado
 
         FROM emitidos e
-
-        LEFT JOIN locales l
-          ON e.Local = l.Num_local
-
+        LEFT JOIN locales l ON e.Local = l.Num_local
         WHERE e.anulado = 0
-
-        GROUP BY
-          e.Local,
-          l.Nom_local
-
+        GROUP BY e.Local, l.Nom_local
         HAVING
           MAX(e.fecha) >= DATEADD(
             DAY,
@@ -349,8 +316,7 @@ router.get(
       `);
 
 
-      let data =
-        result.recordset || [];
+      let data = result.recordset || [];
 
 
       /* =====================================================
@@ -368,36 +334,18 @@ router.get(
               item.codLocal
             );
 
-          return mapaConexiones.has(
-            codigo
-          );
+          return mapaConexiones.has( codigo );
         })
         .map(item => {
-          const codigo =
-            normalizarCodLocal(
-              item.codLocal
-            );
-
-          const connection =
-            mapaConexiones.get(
-              codigo
-            );
+          const codigo = normalizarCodLocal( item.codLocal );
+          const connection = mapaConexiones.get( codigo );
 
           return {
             ...item,
-
-            codLocal:
-              codigo,
-
-            connection_id:
-              connection.id,
-
-            nombreLocal:
-              connection.name ||
-              item.nombreLocal,
-
-            activo:
-              connection.activo
+            codLocal: codigo,
+            connection_id: connection.id,
+            nombreLocal: connection.name || item.nombreLocal,
+            activo: connection.activo
           };
         });
 
@@ -439,37 +387,19 @@ router.get(
 
 
       conexiones.forEach(connection => {
-        const codigo =
-          normalizarCodLocal(
-            connection.codLocal
-          );
+        const codigo = normalizarCodLocal(connection.codLocal );
 
-        if (
-          codigo === null ||
-          codigosData.has(codigo)
-        ) {
+        if ( codigo === null || codigosData.has(codigo)) {
           return;
         }
 
         data.push({
-          codLocal:
-            codigo,
-
-          nombreLocal:
-            connection.name,
-
-          connection_id:
-            connection.id,
-
-          ultimaFecha:
-            null,
-
-          minutos:
-            null,
-
-          activo:
-            connection.activo,
-
+          codLocal: codigo,
+          nombreLocal: connection.name,
+          connection_id: connection.id,
+          ultimaFecha: null,
+          minutos: null,
+          activo: connection.activo,
           estado:
             connection.activo
               ? "Sin ventas hoy"
@@ -491,51 +421,23 @@ router.get(
           .filter(local =>
             local.estado === "Sin ventas hoy" &&
             local.activo === true &&
-            local.connection_id !== null
-          )
-          .map(local =>
-            Number(
-              local.connection_id
-            )
-          )
-          .filter(
-            Number.isFinite
-          );
+            local.connection_id !== null )
+          .map(local => Number(local.connection_id))
+          .filter(Number.isFinite);
 
 
-      if (
-        conexionesSinVentas.length > 0
-      ) {
-        const horarios =
-          await mgmtDb(
-            "local_horarios_base"
-          )
-            .select(
-              "connection_id"
-            )
-            .where({
-              dia_semana:
-                diaSemana,
-
-              activo:
-                true,
-
-              cerrado:
-                true
-            })
-            .whereIn(
-              "connection_id",
-              conexionesSinVentas
-            );
+      if ( conexionesSinVentas.length > 0 ) {
+        const horarios = await mgmtDb("local_horarios_base")
+            .select("connection_id")
+            .where({dia_semana:diaSemana, activo: true, cerrado: true })
+            .whereIn("connection_id",conexionesSinVentas);
 
 
         const conexionesCerradas =
           new Set(
             horarios.map(
               horario =>
-                Number(
-                  horario.connection_id
-                )
+                Number( horario.connection_id )
             )
           );
 

@@ -51,28 +51,37 @@ async function enviarAlertaDistribucion(empresa, resultado) {
   const html = `
     <div style="font-family:Arial,Helvetica,sans-serif;font-size:14px">
       <h2>Error en distribución de vendedores</h2>
+
       <p>
         El proceso automático de distribución de vendedores para
         <strong>${empresa.nombre}</strong>
         presentó errores por segunda vez.
       </p>
+
       <p>
         Locales afectados:
         <strong>${resultado.errores}</strong>
       </p>
+
       ${lista ? `<ul>${lista}</ul>` : ""}
+
       <p>
         El lote fue liberado para permitir que las nuevas cargas
         continúen normalmente. Los locales indicados deben ser
         revisados manualmente.
       </p>
+
       <p>
         Fecha:
-        <strong>${new Date().toLocaleString("es-CL", {
-          timeZone: TIMEZONE
-        })}</strong>
+        <strong>
+          ${new Date().toLocaleString("es-CL", {
+            timeZone: TIMEZONE
+          })}
+        </strong>
       </p>
+
       <hr>
+
       <small>
         Este correo fue generado automáticamente por el sistema de administración.
       </small>
@@ -94,46 +103,62 @@ async function enviarAlertaDistribucion(empresa, resultado) {
 }
 
 async function procesarEmpresa(empresa) {
-  const primerResultado = await distribuirVendedoresEmpresa(
-    empresa.codigo
-  );
+  const inicio = Date.now();
 
-  if (primerResultado.sinTrabajo) {
-    return {
-      empresa: empresa.codigo,
-      parcial: null,
-      nuevos: null
-    };
-  }
-
-  if (primerResultado.reintento) {
-    if (primerResultado.errores > 0) {
-      await enviarAlertaDistribucion(
-        empresa,
-        primerResultado
-      );
-    }
-
-    const nuevos = await distribuirVendedoresEmpresa(
+  try {
+    const primerResultado = await distribuirVendedoresEmpresa(
       empresa.codigo
     );
 
+    if (primerResultado.sinTrabajo) {
+      return {
+        empresa: empresa.codigo,
+        parcial: null,
+        nuevos: null
+      };
+    }
+
+    if (primerResultado.reintento) {
+      if (primerResultado.errores > 0) {
+        await enviarAlertaDistribucion(
+          empresa,
+          primerResultado
+        );
+      }
+
+      const nuevos = await distribuirVendedoresEmpresa(
+        empresa.codigo
+      );
+
+      return {
+        empresa: empresa.codigo,
+        parcial: primerResultado,
+        nuevos
+      };
+    }
+
     return {
       empresa: empresa.codigo,
-      parcial: primerResultado,
-      nuevos
+      parcial: null,
+      nuevos: primerResultado
     };
-  }
+  } finally {
+    const segundos = (
+      (Date.now() - inicio) / 1000
+    ).toFixed(1);
 
-  return {
-    empresa: empresa.codigo,
-    parcial: null,
-    nuevos: primerResultado
-  };
+    console.log(
+      `[CRON VENDEDORES] ${empresa.codigo} finalizada en ${segundos}s`
+    );
+  }
 }
 
 export async function ejecutarDistribucionVendedores() {
   if (ejecutando) {
+    console.log(
+      "[CRON VENDEDORES] Ejecución omitida: proceso anterior aún activo."
+    );
+
     return {
       ok: false,
       ejecutando: true
@@ -141,9 +166,11 @@ export async function ejecutarDistribucionVendedores() {
   }
 
   ejecutando = true;
+  const inicio = Date.now();
 
   try {
-    const empresas = await obtenerEmpresasDistribucion();
+    const empresas =
+      await obtenerEmpresasDistribucion();
 
     if (!empresas.length) {
       return {
@@ -186,9 +213,12 @@ export async function ejecutarDistribucionVendedores() {
     );
 
     return {
-      ok: respuesta.every(resultado => resultado.ok),
+      ok: respuesta.every(
+        resultado => resultado.ok
+      ),
       empresas: respuesta
     };
+
   } catch (error) {
     console.error(
       "[VENDEDORES] Error general ejecutando distribución:",
@@ -196,7 +226,16 @@ export async function ejecutarDistribucionVendedores() {
     );
 
     throw error;
+
   } finally {
+    const segundos = (
+      (Date.now() - inicio) / 1000
+    ).toFixed(1);
+
+    console.log(
+      `[CRON VENDEDORES] Distribución completa finalizada en ${segundos}s`
+    );
+
     ejecutando = false;
   }
 }
