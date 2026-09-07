@@ -46,19 +46,20 @@ router.put("/leido/:id", async (req, res) => {
 router.get("/", async (req, res) => {
   try {
     const role = req.user.role;
-
     const urlsPermitidas = NOTIFICACIONES_POR_ROL[role] || [];
-
+    
     if (!urlsPermitidas.length) {
       return res.json([]);
     }
 
-    const notificaciones = await db("notificaciones")
+    const notificaciones = await mgmtDb("notificaciones")
         .where("leido", false)
         .whereIn("url", urlsPermitidas)
         .orderBy("created_at", "desc");
 
     res.json(notificaciones);
+    console.log(notificaciones);
+    
 
   } catch (error) {
     res.status(500).json({
