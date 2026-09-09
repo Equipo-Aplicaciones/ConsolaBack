@@ -8,7 +8,9 @@ Requisitos:
 Write-Host "=== INICIANDO DEPLOY AUTOMÁTICO ===" -ForegroundColor Cyan
 
 ### EDITA ESTO ###
-$repoUrl = "https://github.com/jcaracas/AdminMenuKiosko.git"   # <- URL repo GitHub
+$backendRepoUrl = "https://github.com/Equipo-Aplicaciones/ConsolaBack.git"
+$frontendRepoUrl = "https://github.com/Equipo-Aplicaciones/Consola_Front.git"
+$deployBranch = "main"   # rama a desplegar en ambos repos
 $appDir = "C:\apps\adminMenu"
 $nodeVersion = "lts"  # opc: 18, 20, lts
 $serviceName = "pm2-adminmenu"
@@ -22,9 +24,12 @@ $serviceName = "pm2-adminmenu"
 # 3) Crear carpeta del proyecto
 #============================
 
-git clone $repoUrl $appDir
+git clone --branch $deployBranch --single-branch $backendRepoUrl $appDir
 
 cd $appDir
+
+Write-Host "Clonando frontend..." -ForegroundColor Yellow
+git clone --branch $deployBranch --single-branch $frontendRepoUrl client
 
 #============================
 # 4) Instalar dependencias server y client
