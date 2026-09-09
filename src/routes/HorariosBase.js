@@ -3,6 +3,14 @@ import mgmtDb from "../db/adminDB.js";
 import { requireAuth } from "../middleware/auth.js";
 import { allowRoles } from "../middleware/roleMiddleware.js";
 import ExcelJS from "exceljs";
+import { logMenuChange } from "../services/menuLogs.service.js";
+
+function resumenHorario({ dias, hora_apertura, hora_cierre, cerrado }) {
+  const diasTexto = Array.isArray(dias) ? dias.join(",") : dias;
+  return cerrado
+    ? `días ${diasTexto}: CERRADO`
+    : `días ${diasTexto}: ${hora_apertura} - ${hora_cierre}`;
+}
 
 const router = express.Router();
 
@@ -22,7 +30,7 @@ router.use(requireAuth);
  */
 router.get("/", allowRoles("Admin", "Comercial", "Zonal"), async (req, res) => {
   try {
-    const { page = 1, limit = 10, search, empresa_id } = req.query;
+    const { page = 1, limit = 10, search, empresa_id, con_horario } = req.query;
 
     const offset = (Number(page) - 1) * Number(limit);
 
@@ -31,12 +39,18 @@ router.get("/", allowRoles("Admin", "Comercial", "Zonal"), async (req, res) => {
 
     /* =========================
        QUERY BASE
+
+       LEFT JOIN (en vez de INNER JOIN) para poder listar
+       tambien los locales que todavia no tienen ningun
+       horario base cargado (filtro "Sin horario").
     ========================= */
 
-    let query = ` SELECT h.connection_id, c."codLocal" AS codlocal, c.name AS local_nombre,
-          c.empresa_id, h.dia_semana, h.hora_apertura, h.hora_cierre, h.activo, h.cerrado
-          FROM local_horarios_base h
-          INNER JOIN connections c ON c.id = h.connection_id`;
+    let query = ` SELECT c.id AS connection_id, c."codLocal" AS codlocal, c.name AS local_nombre,
+          c.empresa_id, c.formato, u.full_name AS zonal_nombre,
+          h.dia_semana, h.hora_apertura, h.hora_cierre, h.activo, h.cerrado
+          FROM connections c
+          LEFT JOIN local_horarios_base h ON h.connection_id = c.id
+          LEFT JOIN users u ON u.id = c.zonal`;
 
     const params = [];
     const where = [];
@@ -68,7 +82,7 @@ router.get("/", allowRoles("Admin", "Comercial", "Zonal"), async (req, res) => {
       query += ` WHERE ${where.join(" AND ")} `;
     }
 
-    query += `ORDER BY c.name, h.hora_apertura, h.dia_semana `;
+    query += ` ORDER BY c.name, h.hora_apertura, h.dia_semana `;
     const result = await mgmtDb.raw(query, params);
     const rows = result.rows;
 
@@ -104,9 +118,15 @@ router.get("/", allowRoles("Admin", "Comercial", "Zonal"), async (req, res) => {
           codlocal: r.codlocal,
           local_nombre: r.local_nombre,
           empresa_id: r.empresa_id,
+          formato: r.formato,
+          zonal_nombre: r.zonal_nombre,
           bloques: {},
         };
       }
+
+      /* Local sin ningun horario cargado: el LEFT JOIN trae
+         una fila con dia_semana null. No arma bloque. */
+      if (r.dia_semana == null) return;
 
       const keyBloque = `${r.hora_apertura}-${r.hora_cierre}-${r.activo}-${r.cerrado}`;
 
@@ -127,11 +147,13 @@ router.get("/", allowRoles("Admin", "Comercial", "Zonal"), async (req, res) => {
        RESPUESTA
     ========================= */
 
-    const items = Object.values(agrupado).map((local) => ({
+    let items = Object.values(agrupado).map((local) => ({
       connection_id: local.connection_id,
       codlocal: local.codlocal,
       local_nombre: local.local_nombre,
       empresa_id: local.empresa_id,
+      formato: local.formato,
+      zonal_nombre: local.zonal_nombre,
       horarios: Object.values(local.bloques).map((b) => ({
         dias: b.dias.join(" - "),
         horario: b.cerrado
@@ -144,6 +166,14 @@ router.get("/", allowRoles("Admin", "Comercial", "Zonal"), async (req, res) => {
       })),
     }));
 
+    /* FILTRO CON/SIN HORARIO */
+
+    if (con_horario === "true") {
+      items = items.filter((local) => local.horarios.length > 0);
+    } else if (con_horario === "false") {
+      items = items.filter((local) => local.horarios.length === 0);
+    }
+
     const paginatedItems = items.slice(offset, offset + Number(limit));
 
     res.json({
@@ -151,6 +181,7 @@ router.get("/", allowRoles("Admin", "Comercial", "Zonal"), async (req, res) => {
       total: items.length,
     });
   } catch (err) {
+    console.error("ERROR OBTENIENDO HORARIOS BASE:", err);
     res.status(500).json({
       error: "Error obteniendo horarios base",
     });
@@ -217,6 +248,10 @@ router.post(
         });
       }
 
+      const anterior = await mgmtDb("local_horarios_base")
+        .where({ connection_id, dia_semana })
+        .first();
+
       await mgmtDb.raw(
         ` INSERT INTO local_horarios_base (
           connection_id,
@@ -244,6 +279,28 @@ router.post(
           cerrado,
         ],
       );
+
+      await logMenuChange({
+        entidad: "horario_base",
+        entidadId: connection_id,
+        campo: `dia_${dia_semana}`,
+        valorAnterior: anterior
+          ? resumenHorario({
+              dias: [dia_semana],
+              hora_apertura: anterior.hora_apertura,
+              hora_cierre: anterior.hora_cierre,
+              cerrado: anterior.cerrado,
+            })
+          : "sin horario",
+        valorNuevo: resumenHorario({
+          dias: [dia_semana],
+          hora_apertura,
+          hora_cierre,
+          cerrado,
+        }),
+        usuario: req.user.username,
+        rol: req.user.role,
+      });
 
       res.json({ ok: true });
     } catch (err) {
@@ -366,6 +423,20 @@ router.post("/bulk", allowRoles("Admin", "Zonal"), async (req, res) => {
         cerrado,
         created_at: mgmtDb.fn.now(),
       });
+
+    const resumenNuevo = resumenHorario({ dias, hora_apertura, hora_cierre, cerrado });
+
+    for (const connection_id of connectionIds) {
+      await logMenuChange({
+        entidad: "horario_base",
+        entidadId: connection_id,
+        campo: "bulk_horario",
+        valorAnterior: null,
+        valorNuevo: resumenNuevo,
+        usuario: req.user.username,
+        rol: req.user.role,
+      });
+    }
 
     res.json({
       ok: true,
@@ -504,6 +575,23 @@ router.post(
         });
       }
 
+      const anteriores = await mgmtDb("local_horarios_base").where({
+        connection_id: connectionId,
+      });
+
+      const resumenAnterior = anteriores.length
+        ? anteriores
+            .map((h) =>
+              resumenHorario({
+                dias: [h.dia_semana],
+                hora_apertura: h.hora_apertura,
+                hora_cierre: h.hora_cierre,
+                cerrado: h.cerrado,
+              }),
+            )
+            .join(" | ")
+        : "sin horario";
+
       await mgmtDb.transaction(async (trx) => {
         /*
          * 1. Eliminar horarios
@@ -534,6 +622,16 @@ router.post(
         }));
 
         await trx("local_horarios_base").insert(rows);
+      });
+
+      await logMenuChange({
+        entidad: "horario_base",
+        entidadId: connectionId,
+        campo: "reemplazo_horario",
+        valorAnterior: resumenAnterior,
+        valorNuevo: resumenHorario({ dias, hora_apertura, hora_cierre, cerrado }),
+        usuario: req.user.username,
+        rol: req.user.role,
       });
 
       res.json({

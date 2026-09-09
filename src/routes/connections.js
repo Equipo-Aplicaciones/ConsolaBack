@@ -5,13 +5,71 @@ import sql from "mssql";
 import { requireAuth } from "../middleware/auth.js";
 import { getConnectionById } from "../db/connections.js";
 import { allowRoles } from "../middleware/roleMiddleware.js";
+import { logMenuChange } from "../services/menuLogs.service.js";
 
 
 const router = express.Router();
 
 router.use(requireAuth);
 
-// Obtener locales sin zonal asignado 
+/**
+ * ============================================================
+ * GET /connections/logs
+ *
+ * Historial de cambios sobre locales (alta/edición/baja/estado)
+ * y sobre sus horarios base, para la solapa "Logs" de
+ * Administración de Locales.
+ * ============================================================
+ */
+router.get("/logs", allowRoles("Admin", "Comercial", "Zonal"), async (req, res) => {
+  try {
+    const { date_from, date_to, usuario, local } = req.query;
+
+    const query = mgmtDb("menu_logs as l")
+      .leftJoin("connections as c", function () {
+        this.on(
+          mgmtDb.raw(`l.entidad_id = CAST(c.id AS TEXT)`),
+        );
+      })
+      .whereIn("l.entidad", ["connection", "horario_base"])
+      .select(
+        "l.id",
+        "l.created_at",
+        "l.entidad",
+        "l.entidad_id",
+        "l.campo",
+        "l.valor_anterior",
+        "l.valor_nuevo",
+        "l.usuario",
+        "l.rol",
+        "c.name as local_nombre",
+        "c.codLocal as codlocal",
+      )
+      .orderBy("l.created_at", "desc");
+
+    if (date_from) query.where("l.created_at", ">=", `${date_from} 00:00:00`);
+    if (date_to) query.where("l.created_at", "<=", `${date_to} 23:59:59`);
+    if (usuario) query.whereILike("l.usuario", `%${usuario}%`);
+
+    if (local) {
+      query.where(function () {
+        this.whereILike("c.name", `%${local}%`).orWhereRaw(
+          `CAST(c."codLocal" AS TEXT) ILIKE ?`,
+          [`%${local}%`],
+        );
+      });
+    }
+
+    const rows = await query.limit(1000);
+
+    res.json({ success: true, data: rows });
+  } catch (err) {
+    console.error("ERROR OBTENIENDO LOGS DE LOCALES:", err);
+    res.status(500).json({ success: false, message: "Error al obtener logs" });
+  }
+});
+
+// Obtener locales sin zonal asignado
 router.get("/zonal/id/:userId",  async (req, res) => {
   try {
     const result = await mgmtDb("connections")
@@ -61,7 +119,7 @@ router.get("/paneladmin",  async (req, res) => {
 
     const query = mgmtDb("connections")
       .select("id", "name", "host", "codLocal", "zonal",
-        "kiosko", "ck", "kds", "c_kds", "llamador", "c_llamador", "created_at","activo", "rut", "razon_social","empresa_id")
+        "kiosko", "ck", "kds", "c_kds", "llamador", "c_llamador", "created_at","activo", "rut", "razon_social","empresa_id", "formato")
       .orderBy("name", "asc");
 
     if (search) {
@@ -125,7 +183,8 @@ router.get("/detalle/:id",  async (req, res) => {
         "u.email as zonal_email",
         "c.rut as rut",
         "c.razon_social as razon_social",
-        "c.empresa_id"
+        "c.empresa_id",
+        "c.formato"
       )
       .where("c.id", id)
       .first();
@@ -157,6 +216,16 @@ router.post("/",  async (req, res) => {
       .insert(payload)
       .returning("*");
 
+    await logMenuChange({
+      entidad: "connection",
+      entidadId: row.id,
+      campo: "alta_local",
+      valorAnterior: null,
+      valorNuevo: `${row.name} (codLocal ${row.codLocal}, host ${row.host})`,
+      usuario: req.user.username,
+      rol: req.user.role,
+    });
+
     res.status(201).json(row);
   } catch (error) {
     console.error(error);
@@ -167,12 +236,35 @@ router.post("/",  async (req, res) => {
 // ✅ Editar conexión
 router.put("/:id", async (req, res) => {
   try {
+    const anterior = await mgmtDb("connections")
+      .where({ id: req.params.id })
+      .first();
+
     const payload = normalizarBody(req.body);
 
     const [row] = await mgmtDb("connections")
       .where({ id: req.params.id })
       .update(payload)
       .returning("*");
+
+    if (anterior) {
+      for (const campo of Object.keys(payload)) {
+        const valorAnterior = anterior[campo];
+        const valorNuevo = payload[campo];
+
+        if (String(valorAnterior ?? "") !== String(valorNuevo ?? "")) {
+          await logMenuChange({
+            entidad: "connection",
+            entidadId: req.params.id,
+            campo,
+            valorAnterior,
+            valorNuevo,
+            usuario: req.user.username,
+            rol: req.user.role,
+          });
+        }
+      }
+    }
 
     res.json(row);
   } catch (error) {
@@ -204,15 +296,15 @@ router.patch("/estado/:id", async (req, res) => {
 
   await mgmtDb("connections").where({ id }).update({ activo });
 
-  /*await logMenuChange({
+  await logMenuChange({
     entidad: "connection",
     entidadId: id,
-    campo: "UDTATE_ACTIVO",
-    valorAnterior: activo ? false : true,
+    campo: "activo",
+    valorAnterior: !activo,
     valorNuevo: activo,
     usuario: user.username,
     rol: user.role,
-  });*/
+  });
 
   res.json({ ok: true });
 });
@@ -220,7 +312,22 @@ router.patch("/estado/:id", async (req, res) => {
 // ✅ Eliminar
 router.delete("/:id",  async (req, res) => {
   try {
+    const anterior = await mgmtDb("connections").where({ id: req.params.id }).first();
+
     await mgmtDb("connections").where({ id: req.params.id }).del();
+
+    if (anterior) {
+      await logMenuChange({
+        entidad: "connection",
+        entidadId: req.params.id,
+        campo: "baja_local",
+        valorAnterior: `${anterior.name} (codLocal ${anterior.codLocal})`,
+        valorNuevo: null,
+        usuario: req.user.username,
+        rol: req.user.role,
+      });
+    }
+
     res.json({ ok: true });
   } catch {
     res.status(500).json({ error: "Error al eliminar conexión" });
@@ -568,6 +675,7 @@ function normalizarBody(body) {
     razon_social: body.razon_social ? body.razon_social.trim() : null,
 
     empresa_id: body.empresa_id  ? Number(body.empresa_id) : 2,
+    formato: body.formato || null,
   };
 }
 
