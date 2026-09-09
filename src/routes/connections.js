@@ -474,6 +474,7 @@ router.get("/:connectionId/vendedor/:rut", allowRoles("Admin", "N2"), async (req
           nombre,
           puesto,
           cuil,
+          locales,
           debaja,
           inhab
         FROM vendedor
@@ -495,6 +496,7 @@ router.get("/:connectionId/vendedor/:rut", allowRoles("Admin", "N2"), async (req
       nombre: vendedor.nombre?.trim() || "",
       puesto: vendedor.puesto?.trim() || "",
       cuil: vendedor.cuil?.trim().toUpperCase() || "",
+      locales: vendedor.locales?.trim() || "",
       debaja: Number(vendedor.debaja || 0),
       inhab: Number(vendedor.inhab || 0)
     });
@@ -514,7 +516,7 @@ router.get("/:connectionId/vendedor/:rut", allowRoles("Admin", "N2"), async (req
 
 router.put("/:connectionId/vendedor/:rut", allowRoles("Admin", "N2"), async (req, res) => {
   const { connectionId, rut } = req.params;
-  const { vendedor, puesto, estado } = req.body;
+  const { vendedor, puesto, estado, locales } = req.body;
   let pool;
 
   try {
@@ -577,6 +579,7 @@ router.put("/:connectionId/vendedor/:rut", allowRoles("Admin", "N2"), async (req
           nombre,
           puesto,
           cuil,
+          locales,
           debaja,
           inhab
         FROM vendedor
@@ -595,16 +598,19 @@ router.put("/:connectionId/vendedor/:rut", allowRoles("Admin", "N2"), async (req
 
     const debaja = estadoNormalizado === "ACTIVO" ? 0 : 1;
     const inhab = estadoNormalizado === "ACTIVO" ? 0 : 1;
+    const localesNormalizado = String(locales ?? registro.locales ?? "").trim();
 
     const result = await pool
       .request()
       .input("vendedor", sql.Int, Number(vendedor))
       .input("cuil", sql.VarChar(20), cuil)
       .input("puesto", sql.VarChar(30), puestoNormalizado)
+      .input("locales", sql.VarChar(20), localesNormalizado)
       .input("debaja", sql.Int, debaja)
       .input("inhab", sql.Int, inhab)
       .query(` UPDATE vendedor SET
           puesto = @puesto,
+          locales = @locales,
           debaja = @debaja,
           inhab = @inhab
         WHERE vendedor = @vendedor
@@ -620,7 +626,7 @@ router.put("/:connectionId/vendedor/:rut", allowRoles("Admin", "N2"), async (req
 
     await mgmtDb("notificaciones").insert({
       titulo: "Modificación de vendedor",
-      contenido: `RUT ${cuil} - Cambio Puesto a ${puestoNormalizado} - En Local ${connConfig.name}.`,
+      contenido: `RUT ${cuil} - Cambio Puesto a ${puestoNormalizado}, Locales a "${localesNormalizado}" - En Local ${connConfig.name}.`,
       leido: false,
       url: "vendedores",
       created_at: new Date()
@@ -632,6 +638,7 @@ router.put("/:connectionId/vendedor/:rut", allowRoles("Admin", "N2"), async (req
       cuil,
       nombre: registro.nombre?.trim() || "",
       puesto: puestoNormalizado,
+      locales: localesNormalizado,
       estado: estadoNormalizado,
       debaja,
       inhab,
