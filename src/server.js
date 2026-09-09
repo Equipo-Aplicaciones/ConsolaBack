@@ -36,11 +36,13 @@ import { tareaCodigosQuemables } from "./jobs/tareaCodigosQuemables.js";
 import { totemsStatusJob } from "./jobs/totemsStatusJob.js";
 import { iniciarVendedorScheduler } from "./jobs/vendedorScheduler.js";
 
-initScheduledTaskJob();
-initCronJobs();
-tareaCodigosQuemables();
-totemsStatusJob();
-iniciarVendedorScheduler();
+if (process.env.DISABLE_CRON_JOBS !== "true") {
+  initScheduledTaskJob();
+  initCronJobs();
+  tareaCodigosQuemables();
+  totemsStatusJob();
+  iniciarVendedorScheduler();
+}
 
 let ultimaRevision = Date.now();
 
