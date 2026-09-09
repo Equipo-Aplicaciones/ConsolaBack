@@ -222,6 +222,14 @@ async function obtenerEstadoTotem(
             ? ahora
             : null,
 
+        // Primera observación del día: si arranca OFF, es el momento
+        // más temprano que tenemos como "apagado" (no sabemos desde
+        // cuándo antes de empezar a monitorear).
+        hora_apagado:
+          estadoActual === "OFF"
+            ? ahora
+            : null,
+
         ultima_revision: ahora,
 
         created_at: ahora,
@@ -262,6 +270,39 @@ async function obtenerEstadoTotem(
    */
 
   if (registro.estado === "ON") {
+
+    /**
+     * ON -> OFF
+     *
+     * Aquí registramos la hora en que se apagó.
+     */
+
+    if (estadoActual === "OFF") {
+
+      await mgmtDb("totem_estado_diario")
+        .where({
+          id: registro.id
+        })
+        .update({
+          estado: "OFF",
+          ip,
+          hora_apagado: mgmtDb.fn.now(),
+          ultima_revision: mgmtDb.fn.now(),
+          updated_at: mgmtDb.fn.now()
+        });
+
+      return {
+        ip,
+        estado: "OFF",
+        horaEncendido: registro.hora_encendido
+      };
+    }
+
+    /**
+     * ON -> ON
+     *
+     * Sin cambios de estado.
+     */
 
     await mgmtDb("totem_estado_diario")
       .where({
@@ -306,6 +347,7 @@ async function obtenerEstadoTotem(
           estado: "ON",
           ip,
           hora_encendido: mgmtDb.fn.now(),
+          hora_apagado: null,
           ultima_revision: mgmtDb.fn.now(),
           updated_at: mgmtDb.fn.now()
         });

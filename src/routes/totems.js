@@ -21,6 +21,7 @@ router.get("/", async (req, res) => {
       "ted.ip",
       "ted.estado",
       "ted.hora_encendido",
+      "ted.hora_apagado",
       "ted.ultima_revision",
       "ted.fecha",
       "c.name as local_nombre")
@@ -77,6 +78,7 @@ router.get("/resumen", async (req, res) => {
         "ted.totem_numero",
         "ted.estado",
         "ted.hora_encendido",
+        "ted.hora_apagado",
         "ted.ultima_revision" )
       .orderBy([
         {
