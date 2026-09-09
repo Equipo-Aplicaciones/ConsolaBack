@@ -3,7 +3,9 @@ node_modules/
 dist/
 .DS_Store
 *.log
-client/node_modules/
+
+# client vive en su propio repo (Consola_Front); no se trackea aquí
+client/
 
 # Entornos
 .env
