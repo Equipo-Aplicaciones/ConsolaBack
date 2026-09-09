@@ -42,6 +42,21 @@ tareaCodigosQuemables();
 totemsStatusJob();
 iniciarVendedorScheduler();
 
+let ultimaRevision = Date.now();
+
+setInterval(() => {
+  const ahora = Date.now();
+  const retraso = ahora - ultimaRevision - 1000;
+
+  if (retraso > 500) {
+    console.log(
+      `[EVENT LOOP] ${new Date().toISOString()} - Bloqueo detectado: ${retraso}ms`
+    );
+  }
+
+  ultimaRevision = ahora;
+}, 1000);
+
 // Create server
 const app = express();
 

@@ -385,15 +385,8 @@ async function obtenerEstadoTotem(
  */
 
 export async function monitorearTotems() {
-
   const fecha = obtenerFechaActual();
-
-
-  /**
-   * ===================================================
-   * OBTENER LOCALES
-   * ===================================================
-   *
+  /**OBTENER LOCALES
    * Por ahora monitoreamos solamente empresa_id = 2
    * (Tarragona).
    */
@@ -402,14 +395,7 @@ export async function monitorearTotems() {
     .where("activo", true)
     .where("kiosko", true)
     .where("empresa_id", 2)
-    .select(
-      "id",
-      "empresa_id",
-      "codLocal",
-      "name",
-      "host",
-      "ck"
-    );
+    .select("id", "empresa_id", "codLocal", "name", "host", "ck");
 
 
   /**
@@ -437,46 +423,23 @@ export async function monitorearTotems() {
   const resultados = [];
 
 
-  /**
-   * ===================================================
-   * PROCESAR LOCALES
-   * ===================================================
-   */
+  /** PROCESAR LOCALES */
 
   for (const connection of conexiones) {
-
-    const cantidadTotems =
-      obtenerCantidadTotems(connection);
-
+    const cantidadTotems = obtenerCantidadTotems(connection);
 
     if (cantidadTotems === 0) {
       continue;
     }
 
+    /** nPROCESAR TÓTEMS  */
 
-    /**
-     * =================================================
-     * PROCESAR TÓTEMS
-     * =================================================
-     */
-
-    for (
-      let numeroTotem = 1;
-      numeroTotem <= cantidadTotems;
-      numeroTotem++
-    ) {
-
+    for ( let numeroTotem = 1; numeroTotem <= cantidadTotems; numeroTotem++ ) {
       totalTotems++;
 
       try {
-
-        const resultado =
-          await obtenerEstadoTotem(
-            connection,
-            numeroTotem,
-            fecha
-          );
-
+        const resultado = await obtenerEstadoTotem(
+            connection, numeroTotem, fecha );
 
         if (resultado.estado === "ON") {
           totalOn++;
