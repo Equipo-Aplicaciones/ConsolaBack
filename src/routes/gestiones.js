@@ -419,7 +419,7 @@ router.get("/", allowRoles("Admin", "N1", "N2"),async (req, res) => {
 
    Solo Admin y N2.
 
-   Devuelve usuarios N1 disponibles
+   Devuelve usuarios N1, N2 y Admin disponibles
    para ser asignados como encargados.
 ========================================================= */
 
@@ -432,9 +432,9 @@ router.get("/usuarios/encargados",allowRoles("Admin","N2"),async (req, res) => {
             "full_name",
             "role"
           )
-          .where(
+          .whereIn(
             "role",
-            "N1"
+            ["N1", "N2", "Admin"]
           )
           .orderBy(
             "full_name",
@@ -514,12 +514,14 @@ router.put("/:id/encargado",allowRoles("Admin", "N2"), async (req, res) => {
         await db(
           "users"
         )
-          .where({
-            id:
-              encargado_id,
-            role:
-              "N1"
-          })
+          .where(
+            "id",
+            encargado_id
+          )
+          .whereIn(
+            "role",
+            ["N1", "N2", "Admin"]
+          )
           .first();
 
       if (!usuario) {
