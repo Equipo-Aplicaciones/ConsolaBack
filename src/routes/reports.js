@@ -6,6 +6,103 @@ import {allowRoles} from "../middleware/roleMiddleware.js";
 
 const router = express.Router();
 
+const DIAS_ES = {
+  Sunday: "Domingo",
+  Monday: "Lunes",
+  Tuesday: "Martes",
+  Wednesday: "Miércoles",
+  Thursday: "Jueves",
+  Friday: "Viernes",
+  Saturday: "Sábado"
+};
+
+// 🔥 NORMALIZACIÓN DE NOMBRES DE PRODUCTO
+//
+// El mismo producto queda cargado varias veces con un sufijo de
+// canal/combo distinto (ej: "LATA COCA-COLA CPR", "LATA COCA-COLA PPM",
+// "LATA COCA-COLA SPP" son la misma lata de Coca-Cola, solo que se
+// registró el agotado desde combos distintos). Se agrupan sacando ese
+// sufijo, sin tocar variantes que SÍ son un producto distinto (ej. "SIN
+// AZUCAR"/"ZERO" quedan aparte de la versión regular).
+const SUFIJOS_CANAL = ["CPR", "PPM", "SPP", "CCR", "CRM", "CRR", "LIENZO", "LIE"];
+
+// Grupos manuales: familias de productos que el catálogo carga con nombres
+// libres distintos (typos, tamaños, variantes de combo) pero que para el
+// negocio son "lo mismo" a efectos de ver qué se agotó. Se evalúan en orden
+// — el primero que matchea gana — así una regla específica (ej. "extra queso
+// cheddar") no queda tapada por una más general ("extra queso"). El nombre
+// original (post limpieza de sufijo de canal) se conserva como "mix" para
+// poder ver el detalle real al hacer clic en el grupo.
+const GRUPOS_MANUALES = [
+  { test: (n) => n.startsWith("extra queso cheddar"), canonical: "extra queso cheddar" },
+  { test: (n) => n.includes("mozzarella stick"), canonical: "mozzarella stick" },
+  { test: (n) => n.includes("cafe capuccino") || n.includes("cafe capucciono"), canonical: "cafe capuccino" },
+  // "jugo de naranja" y variantes sin el "de" (ej. "jugo naranja r", "jugo naranja m")
+  { test: (n) => n.includes("jugo de naranja") || n.includes("jugo naranja"), canonical: "jugo de naranja" },
+  { test: (n) => n.includes("extra cebolla") || n.includes("cebolla ring"), canonical: "extra cebolla" },
+  { test: (n) => n.includes("bacon bbq"), canonical: "bacon bbq" },
+  { test: (n) => n.includes("agua c/gas"), canonical: "agua c/gas" },
+  { test: (n) => n.includes("agua s/gas"), canonical: "agua s/gas" },
+  { test: (n) => n.includes("coffee time"), canonical: "coffee time" },
+  { test: (n) => n.includes("cafe grande"), canonical: "cafe grande" },
+  { test: (n) => n.includes("cheddar bbq"), canonical: "cheddar bbq" },
+  { test: (n) => n.includes("gringou"), canonical: "gringou" },
+  { test: (n) => n.includes("extra queso"), canonical: "extra queso" }
+];
+
+function agruparManual(nombreBase) {
+  if (!nombreBase) return nombreBase;
+  const grupo = GRUPOS_MANUALES.find((g) => g.test(nombreBase));
+  return grupo ? grupo.canonical : nombreBase;
+}
+
+// Limpieza base: saca el sufijo de canal/combo y pasa todo a minúscula, SIN
+// aplicar todavía los grupos manuales de arriba (eso lo hace
+// normalizarProducto). Separado para poder guardar el nombre real como
+// detalle ("mix") cuando un producto cae dentro de un grupo manual.
+function normalizarBase(nombreOriginal) {
+  if (!nombreOriginal) return nombreOriginal;
+
+  let nombre = nombreOriginal.trim();
+
+  // "COCA COLA" (sin guión) y "COCA-COLA" son el mismo producto
+  nombre = nombre.replace(/\bCOCA\s+COLA\b/gi, "COCA-COLA");
+
+  const partes = nombre.split(/\s+/);
+  const ultima = partes[partes.length - 1]?.toUpperCase();
+
+  if (partes.length > 1 && SUFIJOS_CANAL.includes(ultima)) {
+    partes.pop();
+    nombre = partes.join(" ");
+  }
+
+  // Los nombres llegan cargados con mayúsculas/minúsculas mezcladas según
+  // quién los tipeó ("Agr Salsa Tarragona" vs "LATA COCA-COLA") — se pasa
+  // todo a minúscula para que se vea parejo en todo el dashboard.
+  return nombre.trim().toLowerCase();
+}
+
+function normalizarProducto(nombreOriginal) {
+  return agruparManual(normalizarBase(nombreOriginal));
+}
+
+// Suma cantidades de una lista de filas {producto, cantidad} agrupando
+// por nombre YA normalizado.
+function agruparPorProductoNormalizado(filas, { productoKey = "producto", cantidadKey = "cantidad" } = {}) {
+  const mapa = new Map();
+
+  filas.forEach((fila) => {
+    const nombre = normalizarProducto(fila[productoKey]);
+    const cantidad = Number(fila[cantidadKey]);
+
+    mapa.set(nombre, (mapa.get(nombre) || 0) + cantidad);
+  });
+
+  return [...mapa.entries()]
+    .map(([producto, cantidad]) => ({ producto, cantidad }))
+    .sort((a, b) => b.cantidad - a.cantidad);
+}
+
 function parseDateRange(q) {
   const today = new Date();
 
@@ -61,13 +158,19 @@ router.get("/productosagotados",allowRoles("Admin"), async (req, res) => {
       .andWhere("l.created_at", "<", hastaPlus);
 
     // 🔥 TOP PRODUCTOS
-    const productos = await baseQuery
+    //
+    // Se agrupa primero por nombre crudo en SQL (rápido), y recién
+    // después se re-agrupa por nombre NORMALIZADO en JS — así "LATA
+    // COCA-COLA CPR/PPM/SPP" quedan sumados en una sola fila antes de
+    // aplicar el Top N, en vez de competir por separado por un lugar
+    // en el ranking.
+    const productosRaw = await baseQuery
       .clone()
       .select("l.nombre_articulo as producto")
       .count("* as cantidad")
-      .groupBy("l.nombre_articulo")
-      .orderBy("cantidad", "desc")
-      .limit(limit);
+      .groupBy("l.nombre_articulo");
+
+    const productos = agruparPorProductoNormalizado(productosRaw).slice(0, limit);
 
     // 🔥 TOP LOCALES
     const locales = await baseQuery
@@ -79,7 +182,7 @@ router.get("/productosagotados",allowRoles("Admin"), async (req, res) => {
       .limit(limit);
 
     // 🔥 DETALLE (LIMITADO para no romper frontend)
-    const detalle = await baseQuery
+    const detalleRaw = await baseQuery
       .clone()
       .select(
         "l.nombre_articulo as producto",
@@ -88,23 +191,158 @@ router.get("/productosagotados",allowRoles("Admin"), async (req, res) => {
       )
       .orderBy("l.created_at", "desc")
       .limit(500);
-    const dias = await baseQuery
+
+    const detalle = detalleRaw.map((row) => ({
+      ...row,
+      producto: normalizarProducto(row.producto)
+    }));
+
+    const diasRaw = await baseQuery
       .clone()
       .select(
         mgmtDb.raw(`
           EXTRACT(DOW FROM l.created_at) as orden,
-          TO_CHAR(l.created_at, 'Day') as dia
+          TRIM(TO_CHAR(l.created_at, 'Day')) as dia
         `)
       )
       .count("* as cantidad")
       .groupBy("orden", "dia")
       .orderBy("orden");
-            
+
+    // 🔥 DESGLOSE POR PRODUCTO (día de la semana y local), para la barra
+    // apilada y su tooltip. Se usan como máximo los STACK_TOP_N productos más
+    // agotados del período (ya normalizados) para el COLOR de la barra — tope
+    // necesario para no romper la paleta categórica validada (con la cola
+    // larga real de agotados, cubrir el 80% de los productos exigiría 60+
+    // colores, indistinguibles a simple vista) — y el resto se suma en
+    // "Otros". El tooltip, en cambio, lista cada producto normalizado uno por
+    // uno, sin agrupar nada en "Otros", y siempre encabezado por el que más
+    // se agotó.
+    const STACK_TOP_N = 11;
+    const topProductosStack = productos.slice(0, STACK_TOP_N).map((p) => p.producto);
+
+    function armarDesglosePorGrupo(filasRaw) {
+      const breakdownPorGrupo = {};
+      const detalleMapaPorGrupo = {};
+      // grupo -> nombreFinal -> Map(nombreBase -> cantidad) — solo se llena
+      // para productos que pasaron por un GRUPO_MANUAL, así el frontend
+      // puede mostrar "qué mix real hay adentro" al hacer clic en el grupo.
+      const mixMapaPorGrupo = {};
+
+      filasRaw.forEach((row) => {
+        const grupo = row.grupo;
+        const nombreBase = normalizarBase(row.producto);
+        const nombre = agruparManual(nombreBase);
+        const cantidad = Number(row.cantidad);
+        const clave = topProductosStack.includes(nombre) ? nombre : "Otros";
+
+        if (!breakdownPorGrupo[grupo]) breakdownPorGrupo[grupo] = {};
+        breakdownPorGrupo[grupo][clave] = (breakdownPorGrupo[grupo][clave] || 0) + cantidad;
+
+        if (!detalleMapaPorGrupo[grupo]) detalleMapaPorGrupo[grupo] = new Map();
+        const mapa = detalleMapaPorGrupo[grupo];
+        mapa.set(nombre, (mapa.get(nombre) || 0) + cantidad);
+
+        if (nombre !== nombreBase) {
+          if (!mixMapaPorGrupo[grupo]) mixMapaPorGrupo[grupo] = {};
+          if (!mixMapaPorGrupo[grupo][nombre]) mixMapaPorGrupo[grupo][nombre] = new Map();
+          const mixMapa = mixMapaPorGrupo[grupo][nombre];
+          mixMapa.set(nombreBase, (mixMapa.get(nombreBase) || 0) + cantidad);
+        }
+      });
+
+      const detallePorGrupo = {};
+      Object.entries(detalleMapaPorGrupo).forEach(([grupo, mapa]) => {
+        detallePorGrupo[grupo] = [...mapa.entries()]
+          .map(([producto, cantidad]) => {
+            const mixMapa = mixMapaPorGrupo[grupo]?.[producto];
+            if (!mixMapa) return { producto, cantidad };
+
+            const mix = [...mixMapa.entries()]
+              .map(([sub, cant]) => ({ producto: sub, cantidad: cant }))
+              .sort((a, b) => b.cantidad - a.cantidad);
+
+            return { producto, cantidad, mix };
+          })
+          .sort((a, b) => b.cantidad - a.cantidad);
+      });
+
+      return { breakdownPorGrupo, detallePorGrupo };
+    }
+
+    // --- Por día de la semana ---
+    const diasProductosRaw = (await baseQuery
+      .clone()
+      .select(
+        mgmtDb.raw(`EXTRACT(DOW FROM l.created_at) as grupo`),
+        "l.nombre_articulo as producto"
+      )
+      .count("* as cantidad")
+      .groupBy("grupo", "l.nombre_articulo")
+    ).map((row) => ({ ...row, grupo: Number(row.grupo) }));
+
+    const topProductoPorDia = {};
+
+    diasProductosRaw.forEach((row) => {
+      const nombre = normalizarProducto(row.producto);
+      const cantidad = Number(row.cantidad);
+
+      if (!topProductoPorDia[row.grupo] || cantidad > topProductoPorDia[row.grupo].cantidad) {
+        topProductoPorDia[row.grupo] = { producto: nombre, cantidad };
+      }
+    });
+
+    const { breakdownPorGrupo: breakdownPorDia, detallePorGrupo: detalleCompletoPorDia } =
+      armarDesglosePorGrupo(diasProductosRaw);
+
+    const dias = diasRaw.map((row) => {
+      const orden = Number(row.orden);
+      const totalDia = Number(row.cantidad);
+      const top = topProductoPorDia[orden];
+
+      return {
+        dia: DIAS_ES[row.dia] || row.dia,
+        cantidad: totalDia,
+        topProducto: top ? top.producto : null,
+        topProductoPct: top && totalDia > 0
+          ? Math.round((top.cantidad / totalDia) * 100)
+          : null,
+        productosDetalle: detalleCompletoPorDia[orden] || [],
+        ...breakdownPorDia[orden]
+      };
+    });
+
+    // --- Por local (solo para los locales del Top N de arriba) ---
+    const nombresLocalesTop = locales.map((l) => l.local);
+
+    const localesProductosRaw = nombresLocalesTop.length
+      ? await baseQuery
+          .clone()
+          .whereIn("c.name", nombresLocalesTop)
+          .select(
+            "c.name as grupo",
+            "l.nombre_articulo as producto"
+          )
+          .count("* as cantidad")
+          .groupBy("grupo", "l.nombre_articulo")
+      : [];
+
+    const { breakdownPorGrupo: breakdownPorLocal, detallePorGrupo: detalleCompletoPorLocal } =
+      armarDesglosePorGrupo(localesProductosRaw);
+
+    const localesConDesglose = locales.map((row) => ({
+      local: row.local,
+      cantidad: Number(row.cantidad),
+      productosDetalle: detalleCompletoPorLocal[row.local] || [],
+      ...breakdownPorLocal[row.local]
+    }));
+
     res.json({
       productos,
-      locales,
+      locales: localesConDesglose,
       detalle,
-      dias
+      dias,
+      productosStack: topProductosStack
     });
 
   } catch (error) {
