@@ -45,6 +45,12 @@ const GRUPOS_MANUALES = [
   { test: (n) => n.includes("cafe"), canonical: "cafe" },
   // "jugo de naranja" y variantes sin el "de" (ej. "jugo naranja r", "jugo naranja m")
   { test: (n) => n.includes("jugo de naranja") || n.includes("jugo naranja"), canonical: "jugo de naranja" },
+  // Bebida de dispenser Coca-Cola sin azucar: "beb coca-cola sin azucar r",
+  // "beb coca sin azucar reg" (sin la palabra "cola") y "bebida coca-cola sin
+  // azucar me" son el mismo producto en distintos tamaños. Se pide "beb" o
+  // "bebida" + "coca" explícitamente para no mezclarla con "lata coca-cola
+  // sin azucar", que es un producto distinto (lata, no dispenser).
+  { test: (n) => (n.includes("beb coca") || n.includes("bebida coca")) && n.includes("sin azucar"), canonical: "beb coca-cola sin azucar" },
   { test: (n) => n.includes("extra cebolla") || n.includes("cebolla ring"), canonical: "extra cebolla" },
   { test: (n) => n.includes("bacon bbq"), canonical: "bacon bbq" },
   { test: (n) => n.includes("agua c/gas"), canonical: "agua c/gas" },
@@ -177,7 +183,8 @@ router.get("/productosagotados",allowRoles("Admin"), async (req, res) => {
       .count("* as cantidad")
       .groupBy("l.nombre_articulo");
 
-    const productos = agruparPorProductoNormalizado(productosRaw).slice(0, limit);
+    const productosCompletos = agruparPorProductoNormalizado(productosRaw);
+    const productos = productosCompletos.slice(0, limit);
 
     // 🔥 TOP LOCALES
     const locales = await baseQuery
@@ -217,16 +224,21 @@ router.get("/productosagotados",allowRoles("Admin"), async (req, res) => {
       .orderBy("orden");
 
     // 🔥 DESGLOSE POR PRODUCTO (día de la semana y local), para la barra
-    // apilada y su tooltip. Se usan como máximo los STACK_TOP_N productos más
-    // agotados del período (ya normalizados) para el COLOR de la barra — tope
-    // necesario para no romper la paleta categórica validada (con la cola
-    // larga real de agotados, cubrir el 80% de los productos exigiría 60+
-    // colores, indistinguibles a simple vista) — y el resto se suma en
-    // "Otros". El tooltip, en cambio, lista cada producto normalizado uno por
-    // uno, sin agrupar nada en "Otros", y siempre encabezado por el que más
-    // se agotó.
-    const STACK_TOP_N = 11;
-    const topProductosStack = productos.slice(0, STACK_TOP_N).map((p) => p.producto);
+    // apilada y su tooltip. Para el COLOR de la barra se le da tono propio a
+    // todo producto (ya normalizado) que supere el 2% del total agotado del
+    // período — el resto se suma en "Otros". Se pone además un tope duro
+    // (STACK_MAX_COLORS) por las dudas: con la cola larga real de agotados,
+    // cubrir el 100% de los productos exigiría decenas de colores,
+    // indistinguibles a simple vista entre sí. El tooltip, en cambio, lista
+    // cada producto normalizado uno por uno, sin agrupar nada en "Otros", y
+    // siempre encabezado por el que más se agotó.
+    const STACK_MIN_PCT = 0.02; // 2%
+    const STACK_MAX_COLORS = 11; // tope duro: tamaño de la paleta validada
+    const totalCantidadProductos = productosCompletos.reduce((acc, p) => acc + p.cantidad, 0);
+    const topProductosStack = productosCompletos
+      .filter((p) => totalCantidadProductos > 0 && p.cantidad / totalCantidadProductos > STACK_MIN_PCT)
+      .slice(0, STACK_MAX_COLORS)
+      .map((p) => p.producto);
 
     function armarDesglosePorGrupo(filasRaw) {
       const breakdownPorGrupo = {};
