@@ -36,15 +36,19 @@ const SUFIJOS_CANAL = ["CPR", "PPM", "SPP", "CCR", "CRM", "CRR", "LIENZO", "LIE"
 const GRUPOS_MANUALES = [
   { test: (n) => n.startsWith("extra queso cheddar"), canonical: "extra queso cheddar" },
   { test: (n) => n.includes("mozzarella stick"), canonical: "mozzarella stick" },
-  { test: (n) => n.includes("cafe capuccino") || n.includes("cafe capucciono"), canonical: "cafe capuccino" },
+  // "te" como palabra suelta (TE GRANDE, TE REGULAR) — con límite de palabra
+  // para no enganchar "sprite", "latte" o "bites", que también contienen "te".
+  { test: (n) => /\bte\b/.test(n), canonical: "te" },
+  // Cualquier variante de café (capuccino/capucciono, grande, latte, mokaccino,
+  // tradición, sachet...) va a un único grupo "cafe". ("Coffee Time" se
+  // excluye del reporte entero más arriba, no es un producto real.)
+  { test: (n) => n.includes("cafe"), canonical: "cafe" },
   // "jugo de naranja" y variantes sin el "de" (ej. "jugo naranja r", "jugo naranja m")
   { test: (n) => n.includes("jugo de naranja") || n.includes("jugo naranja"), canonical: "jugo de naranja" },
   { test: (n) => n.includes("extra cebolla") || n.includes("cebolla ring"), canonical: "extra cebolla" },
   { test: (n) => n.includes("bacon bbq"), canonical: "bacon bbq" },
   { test: (n) => n.includes("agua c/gas"), canonical: "agua c/gas" },
   { test: (n) => n.includes("agua s/gas"), canonical: "agua s/gas" },
-  { test: (n) => n.includes("coffee time"), canonical: "coffee time" },
-  { test: (n) => n.includes("cafe grande"), canonical: "cafe grande" },
   { test: (n) => n.includes("cheddar bbq"), canonical: "cheddar bbq" },
   { test: (n) => n.includes("gringou"), canonical: "gringou" },
   { test: (n) => n.includes("extra queso"), canonical: "extra queso" }
@@ -155,7 +159,10 @@ router.get("/productosagotados",allowRoles("Admin"), async (req, res) => {
       })
       .where("l.valorNuevo", false)
       .where("l.created_at", ">=", desde)
-      .andWhere("l.created_at", "<", hastaPlus);
+      .andWhere("l.created_at", "<", hastaPlus)
+      // "Coffee Time" no es un producto agotable real (es un combo/marca de
+      // canal) — se excluye del reporte por completo, no solo de los colores.
+      .andWhere(mgmtDb.raw("LOWER(l.nombre_articulo) NOT LIKE '%coffee time%'"));
 
     // 🔥 TOP PRODUCTOS
     //
