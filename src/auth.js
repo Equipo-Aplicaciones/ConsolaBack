@@ -9,18 +9,6 @@ dotenv.config();
 const router = express.Router();
 const JWT_SECRET = process.env.JWT_SECRET;
 
-router.post("/register", async (req, res) => {
-  const { username, password, full_name } = req.body;
-  if (!username || !password) return res.status(400).json({ error: "username y password obligatorios" });
-  const hash = await bcrypt.hash(password, 10);
-  try {
-    const [user] = await mgmtDb("users").insert({ username, password_hash: hash, full_name }).returning(["id","username","full_name"]);
-    res.json({ user });
-  } catch (err) {
-    res.status(400).json({ error: err.message });
-  }
-});
-
 router.post("/login", async (req, res) => {
   const { username, password } = req.body;
   const user = await mgmtDb("users").where({ username }).first();
