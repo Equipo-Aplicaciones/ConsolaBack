@@ -47,11 +47,15 @@ async function actualizarArticulosLocal(pool, articulos) {
     });
 
     const resultado = await request.query(`
+      DECLARE @Actualizados TABLE (Codigo VARCHAR(100));
+
       UPDATE articulo
       SET Web = 1
-      OUTPUT INSERTED.Codigo
+      OUTPUT INSERTED.Codigo INTO @Actualizados
       WHERE Codigo IN (${parametros.join(",")})
-        AND grupo11 > 0
+        AND grupo11 > 0;
+
+      SELECT Codigo FROM @Actualizados;
     `);
 
     for (const row of resultado.recordset || []) {
