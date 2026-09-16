@@ -223,6 +223,12 @@ async function insertarVendedorLocal(
   );
 
   request.input(
+    "clave",
+    sql.VarChar(50),
+    vendedorCentral.clave ?? ""
+  );
+
+  request.input(
     "cuil",
     sql.VarChar(20),
     vendedorCentral.cuil
@@ -357,7 +363,7 @@ async function insertarVendedorLocal(
       @vendedor,
       @nombre,
       @puesto,
-      dbo.ClaveMRC(@cuil),
+      @clave,
       @cuil,
       @locales,
       @debaja,
@@ -378,11 +384,6 @@ async function insertarVendedorLocal(
       0,
       0,
       '',
-      0,
-      0,
-      0,
-      0,
-      0,
       0,
       0,
       0,
