@@ -158,9 +158,19 @@ async function runScheduledTasks({ taskId = null, connectionIds = null } = {}) {
 
       }
     
-  }//fin de if tareas.length>0 
+  }//fin de if tareas.length>0
+
+  // El bloque de desactivación de abajo solo aplica a la corrida automática
+  // diaria (sin taskId). En un run manual, el bloque de activación de arriba
+  // ya cubrió ambas direcciones (lee el checkbox "Producto Visible" y aplica
+  // ese estado al POS) — dejar correr este bloque también pisaría ese
+  // resultado, forzando invisibl=1 sin mirar "visible" para nada.
+  if (taskId) {
+    return;
+  }
 
   //verificar si hay tareas de desactivacion activas para hoy
+  // (solo llega aquí la corrida automática diaria, ver el return de arriba)
   const tareasoFF = await mgmtDb("scheduled_tasks")
         .select("id", "codigo", "nombre","visible","requiere_confirmacion")
         .where({

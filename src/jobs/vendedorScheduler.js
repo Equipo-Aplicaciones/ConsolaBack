@@ -274,4 +274,13 @@ export function detenerVendedorScheduler() {
   tareaProgramada = null;
 }
 
+if (process.env.RUN_VENDEDORES_NOW === "true") {
+  ejecutarDistribucionVendedores().catch(error => {
+    console.error(
+      "[VENDEDORES] Error en ejecución manual (RUN_VENDEDORES_NOW):",
+      error
+    );
+  });
+}
+
 export default iniciarVendedorScheduler;
