@@ -417,10 +417,6 @@ export async function obtenerVendedoresParaDistribucion(cuiles = [], empresa) {
   );
 
   for (const cuil of cuilesNormalizados) {
-    console.log(
-      `[VENDEDORES][${empresa}] Consultando CUIL ${cuil}`
-    );
-
     const request = pool.request();
 
     request.input(
@@ -444,10 +440,6 @@ export async function obtenerVendedoresParaDistribucion(cuiles = [], empresa) {
       FROM vendedor
       WHERE RTRIM(cuil) = @cuil
     `);
-
-    console.log(
-      `[VENDEDORES][${empresa}] CUIL ${cuil}: ${result.recordset.length} resultado(s)`
-    );
 
     for (const registro of result.recordset) {
       vendedores.push({
