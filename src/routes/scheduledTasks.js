@@ -5,9 +5,27 @@ import { requireAuth } from "../middleware/auth.js";
 
 const router = express.Router();
 
+/* EMPRESAS DISPONIBLES PARA ASOCIAR A UNA TAREA */
+
+router.get("/empresas-disponibles", async (req, res) => {
+  try {
+    const empresas = await mgmtDb("empresas")
+      .select("id", "codigo", "nombre")
+      .where({ activo: true })
+      .whereNot("codigo", "QA")
+      .orderBy("id");
+    res.json(empresas);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({
+      message: "Error obteniendo empresas."
+    });
+  }
+});
+
 /* LISTAR TAREAS */
 
-router.get("/tareas", async (req, res) => { 
+router.get("/tareas", async (req, res) => {
   try {
     const tareas = await mgmtDb("scheduled_tasks").orderBy("nombre");
     res.json(tareas);
@@ -34,9 +52,15 @@ router.get("/tarea/:id", async (req, res) => {
     const articulos = await mgmtDb("scheduled_task_articles")
       .where("task_id", tarea.id)
       .orderBy("codigo_articulo");
+
+    const empresasTarea = await mgmtDb("scheduled_task_empresas")
+      .where("task_id", tarea.id)
+      .select("empresa_id");
+
     res.json({
       ...tarea,
-      articulos
+      articulos,
+      empresas: empresasTarea.map(e => e.empresa_id)
     });
   } catch (err) {
     console.error(err);
@@ -57,7 +81,11 @@ router.post("/", async (req, res) => {
       requiere_confirmacion,
       dia_activar,
       dia_desactivar,
-      articulos
+      tipo_accion,
+      campo_objetivo,
+      tabla_objetivo,
+      articulos,
+      empresas
     } = req.body;
     const activo=true
     const omitir_proxima_desactivacion=false
@@ -72,21 +100,36 @@ router.post("/", async (req, res) => {
         activo,
         visible,
         requiere_confirmacion,
-        dia_activar,
-        dia_desactivar,
-        omitir_proxima_desactivacion
+        dia_activar: dia_activar ?? null,
+        dia_desactivar: dia_desactivar ?? null,
+        omitir_proxima_desactivacion,
+        tipo_accion: tipo_accion || "TOGGLE_ARTICULO",
+        campo_objetivo: campo_objetivo || "invisibl",
+        tabla_objetivo: tabla_objetivo ?? null
       })
       .returning("id");
 
 
+    const taskId = typeof id === "object" ? id.id : id;
+
     if (articulos?.length) {
       const rows = articulos.map(codigo => ({
-        task_id: typeof id === "object" ? id.id : id,
+        task_id: taskId,
         codigo_articulo: codigo
       }));
       await mgmtDb("scheduled_task_articles")
         .insert(rows);
     }
+
+    if (empresas?.length) {
+      const rows = empresas.map(empresa_id => ({
+        task_id: taskId,
+        empresa_id
+      }));
+      await mgmtDb("scheduled_task_empresas")
+        .insert(rows);
+    }
+
     res.json({
       ok: true
     });
@@ -113,7 +156,11 @@ router.put("/:id", async (req, res) => {
       dia_activar,
       dia_desactivar,
       omitir_proxima_desactivacion,
-      articulos
+      tipo_accion,
+      campo_objetivo,
+      tabla_objetivo,
+      articulos,
+      empresas
     } = req.body;
 
     await mgmtDb("scheduled_tasks")
@@ -124,9 +171,12 @@ router.put("/:id", async (req, res) => {
         activo,
         visible,
         requiere_confirmacion,
-        dia_activar,
-        dia_desactivar,
+        dia_activar: dia_activar ?? null,
+        dia_desactivar: dia_desactivar ?? null,
         omitir_proxima_desactivacion,
+        tipo_accion: tipo_accion || "TOGGLE_ARTICULO",
+        campo_objetivo: campo_objetivo || "invisibl",
+        tabla_objetivo: tabla_objetivo ?? null,
         updated_at: new Date()
       });
 
@@ -140,6 +190,19 @@ router.put("/:id", async (req, res) => {
         codigo_articulo: codigo
       }));
       await mgmtDb("scheduled_task_articles")
+        .insert(rows);
+    }
+
+    await mgmtDb("scheduled_task_empresas")
+      .where("task_id", req.params.id)
+      .del();
+
+    if (empresas?.length) {
+      const rows = empresas.map(empresa_id => ({
+        task_id: req.params.id,
+        empresa_id
+      }));
+      await mgmtDb("scheduled_task_empresas")
         .insert(rows);
     }
 
@@ -160,6 +223,10 @@ router.put("/:id", async (req, res) => {
 router.delete("/:id", async (req, res) => {
   try {
     await mgmtDb("scheduled_task_articles")
+      .where("task_id", req.params.id)
+      .del();
+
+    await mgmtDb("scheduled_task_empresas")
       .where("task_id", req.params.id)
       .del();
 
