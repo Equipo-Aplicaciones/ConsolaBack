@@ -112,6 +112,35 @@ router.get("/", async (req, res) => {
   res.json(conns.rows);
 });
 
+/* SUGERENCIAS: categorías y claves ya usadas en caracteristicas de otros locales */
+router.get("/caracteristicas/sugerencias", async (req, res) => {
+  try {
+    const categoriasResult = await mgmtDb.raw(`
+      SELECT DISTINCT jsonb_object_keys(caracteristicas) AS nombre
+      FROM connections
+      WHERE caracteristicas IS NOT NULL AND caracteristicas != '{}'::jsonb
+      ORDER BY 1
+    `);
+
+    const clavesResult = await mgmtDb.raw(`
+      SELECT DISTINCT k2 AS nombre
+      FROM connections c
+      CROSS JOIN LATERAL jsonb_each(c.caracteristicas) AS cat(categoria, valores)
+      CROSS JOIN LATERAL jsonb_object_keys(cat.valores) AS k2
+      WHERE c.caracteristicas IS NOT NULL AND c.caracteristicas != '{}'::jsonb
+      ORDER BY 1
+    `);
+
+    res.json({
+      categorias: categoriasResult.rows.map(r => r.nombre),
+      claves: clavesResult.rows.map(r => r.nombre)
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Error obteniendo sugerencias." });
+  }
+});
+
 /* LISTAR CONNECTIONS (con filtros opcionales) */
 router.get("/paneladmin",  async (req, res) => {
   try {
@@ -119,7 +148,7 @@ router.get("/paneladmin",  async (req, res) => {
 
     const query = mgmtDb("connections")
       .select("id", "name", "host", "codLocal", "zonal",
-        "kiosko", "ck", "kds", "c_kds", "llamador", "c_llamador", "created_at","activo", "rut", "razon_social","empresa_id", "formato")
+        "kiosko", "ck", "kds", "c_kds", "llamador", "c_llamador", "created_at","activo", "rut", "razon_social","empresa_id", "formato", "caracteristicas")
       .orderBy("name", "asc");
 
     if (search) {
@@ -270,6 +299,49 @@ router.put("/:id", async (req, res) => {
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: "Error actualizando registro" });
+  }
+});
+
+// ✅ Editar características (JSON libre: RAM, disco, tarjeta de video, etc.)
+router.put("/:id/caracteristicas", async (req, res) => {
+  try {
+    const { caracteristicas } = req.body;
+
+    if (
+      typeof caracteristicas !== "object" ||
+      caracteristicas === null ||
+      Array.isArray(caracteristicas)
+    ) {
+      return res.status(400).json({ error: "caracteristicas debe ser un objeto." });
+    }
+
+    const anterior = await mgmtDb("connections")
+      .where({ id: req.params.id })
+      .first();
+
+    if (!anterior) {
+      return res.status(404).json({ error: "Local no encontrado." });
+    }
+
+    const [row] = await mgmtDb("connections")
+      .where({ id: req.params.id })
+      .update({ caracteristicas: JSON.stringify(caracteristicas) })
+      .returning("*");
+
+    await logMenuChange({
+      entidad: "connection",
+      entidadId: req.params.id,
+      campo: "caracteristicas",
+      valorAnterior: JSON.stringify(anterior.caracteristicas ?? {}),
+      valorNuevo: JSON.stringify(caracteristicas),
+      usuario: req.user.username,
+      rol: req.user.role,
+    });
+
+    res.json(row);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Error actualizando características." });
   }
 });
 
