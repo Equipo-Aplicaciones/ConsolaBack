@@ -119,7 +119,7 @@ router.get("/paneladmin",  async (req, res) => {
 
     const query = mgmtDb("connections")
       .select("id", "name", "host", "codLocal", "zonal",
-        "kiosko", "ck", "kds", "c_kds", "llamador", "c_llamador", "created_at","activo", "rut", "razon_social","empresa_id", "formato")
+        "kiosko", "ck", "kds", "c_kds", "llamador", "c_llamador", "created_at","activo", "rut", "razon_social","empresa_id", "formato", "caracteristicas")
       .orderBy("name", "asc");
 
     if (search) {
@@ -270,6 +270,49 @@ router.put("/:id", async (req, res) => {
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: "Error actualizando registro" });
+  }
+});
+
+// ✅ Editar características (JSON libre: RAM, disco, tarjeta de video, etc.)
+router.put("/:id/caracteristicas", async (req, res) => {
+  try {
+    const { caracteristicas } = req.body;
+
+    if (
+      typeof caracteristicas !== "object" ||
+      caracteristicas === null ||
+      Array.isArray(caracteristicas)
+    ) {
+      return res.status(400).json({ error: "caracteristicas debe ser un objeto." });
+    }
+
+    const anterior = await mgmtDb("connections")
+      .where({ id: req.params.id })
+      .first();
+
+    if (!anterior) {
+      return res.status(404).json({ error: "Local no encontrado." });
+    }
+
+    const [row] = await mgmtDb("connections")
+      .where({ id: req.params.id })
+      .update({ caracteristicas: JSON.stringify(caracteristicas) })
+      .returning("*");
+
+    await logMenuChange({
+      entidad: "connection",
+      entidadId: req.params.id,
+      campo: "caracteristicas",
+      valorAnterior: JSON.stringify(anterior.caracteristicas ?? {}),
+      valorNuevo: JSON.stringify(caracteristicas),
+      usuario: req.user.username,
+      rol: req.user.role,
+    });
+
+    res.json(row);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Error actualizando características." });
   }
 });
 
