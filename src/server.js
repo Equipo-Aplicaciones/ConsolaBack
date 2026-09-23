@@ -26,6 +26,7 @@ import empresasRouter from "./routes/empresas.js";
 import totemsRouter from "./routes/totems.js";
 import gestionesRoutes from "./routes/gestiones.js";
 import estadosRoutes from "./routes/estados.js";
+import savedQueriesRouter from "./routes/savedQueries.js";
 
 
 //import startDailyAlert from "./jobs/dailyAlert.js";
@@ -95,7 +96,7 @@ app.use("/auth", authRouter);
 
 // ✅ SPA fallback (debe ir al final, después de todas las rutas)
 if (serveFrontend) {
-  app.get(/^(?!\/(auth|connections|query|logs|users|reports|menu-locales|articulos|horarios-base|horarios-especiales|ventas|actualizaciones|notificaciones|scheduled-tasks | vendedores | empresas | totems | gestiones | estados )).*/, (req, res, next) => {
+  app.get(/^(?!\/(auth|connections|query|logs|users|reports|menu-locales|articulos|horarios-base|horarios-especiales|ventas|actualizaciones|notificaciones|scheduled-tasks | vendedores | empresas | totems | gestiones | estados | saved-queries )).*/, (req, res, next) => {
     // Excluir rutas API del backend
     if (
       req.originalUrl.startsWith("/auth") ||
@@ -116,7 +117,8 @@ if (serveFrontend) {
       req.originalUrl.startsWith("/empresas") ||
       req.originalUrl.startsWith("/totems") ||
       req.originalUrl.startsWith("/gestiones") ||
-      req.originalUrl.startsWith("/estados")
+      req.originalUrl.startsWith("/estados") ||
+      req.originalUrl.startsWith("/saved-queries")
     ) {
       return next();
     }
@@ -145,6 +147,7 @@ app.use("/empresas",empresasRouter)
 app.use("/totems",totemsRouter)
 app.use("/gestiones",gestionesRoutes)
 app.use("/estados",estadosRoutes)
+app.use("/saved-queries", savedQueriesRouter)
 
 // Cron jobs
 //startDailyAlert();
