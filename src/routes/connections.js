@@ -112,6 +112,35 @@ router.get("/", async (req, res) => {
   res.json(conns.rows);
 });
 
+/* SUGERENCIAS: categorías y claves ya usadas en caracteristicas de otros locales */
+router.get("/caracteristicas/sugerencias", async (req, res) => {
+  try {
+    const categoriasResult = await mgmtDb.raw(`
+      SELECT DISTINCT jsonb_object_keys(caracteristicas) AS nombre
+      FROM connections
+      WHERE caracteristicas IS NOT NULL AND caracteristicas != '{}'::jsonb
+      ORDER BY 1
+    `);
+
+    const clavesResult = await mgmtDb.raw(`
+      SELECT DISTINCT k2 AS nombre
+      FROM connections c
+      CROSS JOIN LATERAL jsonb_each(c.caracteristicas) AS cat(categoria, valores)
+      CROSS JOIN LATERAL jsonb_object_keys(cat.valores) AS k2
+      WHERE c.caracteristicas IS NOT NULL AND c.caracteristicas != '{}'::jsonb
+      ORDER BY 1
+    `);
+
+    res.json({
+      categorias: categoriasResult.rows.map(r => r.nombre),
+      claves: clavesResult.rows.map(r => r.nombre)
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Error obteniendo sugerencias." });
+  }
+});
+
 /* LISTAR CONNECTIONS (con filtros opcionales) */
 router.get("/paneladmin",  async (req, res) => {
   try {
