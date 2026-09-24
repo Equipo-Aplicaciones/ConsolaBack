@@ -9,6 +9,7 @@ import ping from "ping";
 
 const TOTEM_START_OCTET = 131;
 const PING_TIMEOUT = 2;
+const CONCURRENCIA_PING = 10;
 
 
 /**
@@ -465,54 +466,78 @@ export async function monitorearTotems() {
   const resultados = [];
 
 
-  /** PROCESAR LOCALES */
+  /** ARMAR LISTA PLANA DE (LOCAL, TÓTEM) A REVISAR */
+
+  const pendientes = [];
 
   for (const connection of conexiones) {
     const cantidadTotems = obtenerCantidadTotems(connection);
 
-    if (cantidadTotems === 0) {
-      continue;
+    for (let numeroTotem = 1; numeroTotem <= cantidadTotems; numeroTotem++) {
+      pendientes.push({ connection, numeroTotem });
     }
+  }
 
-    /** nPROCESAR TÓTEMS  */
+  totalTotems = pendientes.length;
 
-    for ( let numeroTotem = 1; numeroTotem <= cantidadTotems; numeroTotem++ ) {
-      totalTotems++;
+  /**
+   * PROCESAR EN LOTES EN PARALELO
+   *
+   * Antes se revisaba un tótem a la vez (ping con timeout de 2s cada
+   * uno), lo que con ~30 tótems y varios apagados hacía que el job
+   * completo tardara casi un minuto — tiempo suficiente para que
+   * node-cron perdiera el tick de otro cron (ej. distribución de
+   * vendedores a las 18:00). Se procesan de a CONCURRENCIA_PING en
+   * paralelo para que el total dependa del más lento del lote, no de
+   * la suma de todos.
+   */
 
-      try {
-        const resultado = await obtenerEstadoTotem(
+  for (let i = 0; i < pendientes.length; i += CONCURRENCIA_PING) {
+    const lote = pendientes.slice(i, i + CONCURRENCIA_PING);
+
+    const resultadosLote = await Promise.all(
+      lote.map(async ({ connection, numeroTotem }) => {
+        try {
+          const resultado = await obtenerEstadoTotem(
             connection, numeroTotem, fecha );
 
-        if (resultado.estado === "ON") {
-          totalOn++;
-        } else {
-          totalOff++;
+          return { connection, numeroTotem, resultado };
+        } catch (error) {
+          console.error(
+            `[TOTEMS] Error procesando local ${connection.codLocal}, ` +
+            `tótem ${numeroTotem}:`,
+            error.message
+          );
+
+          return { connection, numeroTotem, error };
         }
+      })
+    );
 
-
-        resultados.push({
-          connectionId: connection.id,
-          empresaId: connection.empresa_id,
-          codLocal: connection.codLocal,
-          local: connection.name,
-          totem: numeroTotem,
-          ip: resultado.ip,
-          estado: resultado.estado,
-          horaEncendido:
-            resultado.horaEncendido
-        });
-
-      } catch (error) {
-
+    for (const item of resultadosLote) {
+      if (item.error) {
         totalOff++;
-
-        console.error(
-          `[TOTEMS] Error procesando local ${connection.codLocal}, ` +
-          `tótem ${numeroTotem}:`,
-          error.message
-        );
-
+        continue;
       }
+
+      const { connection, numeroTotem, resultado } = item;
+
+      if (resultado.estado === "ON") {
+        totalOn++;
+      } else {
+        totalOff++;
+      }
+
+      resultados.push({
+        connectionId: connection.id,
+        empresaId: connection.empresa_id,
+        codLocal: connection.codLocal,
+        local: connection.name,
+        totem: numeroTotem,
+        ip: resultado.ip,
+        estado: resultado.estado,
+        horaEncendido: resultado.horaEncendido
+      });
     }
   }
 

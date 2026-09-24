@@ -117,7 +117,7 @@ async function ejecutarTareaEnLocales(tarea, invisibl, connectionIds) {
   for (const connRow of conexiones) {
     try {
       const config = makeMssqlConfig(connRow.host);
-      const pool = await sql.connect(config);
+      const pool = await new sql.ConnectionPool(config).connect();
 
       try {
         const mensaje = await ejecutarTareaEnConexion(pool, tarea, invisibl);

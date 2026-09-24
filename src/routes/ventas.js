@@ -73,7 +73,7 @@ router.get("/ventas-diarias", allowRoles("Admin","N2","Zonal","Comercial"), asyn
       let localCantidad = 0;
       const config = makeMssqlConfig(c.host);
       try {
-        const localPool = await sql.connect(config);
+        const localPool = await new sql.ConnectionPool(config).connect();
         const r = await localPool
           .request()
           .query(`

@@ -47,7 +47,7 @@ router.post("/execute", async (req, res) => {
     if (!conn) return res.status(404).json({ success: false, message: "Conexión no encontrada" });
 
     const config = makeMssqlConfig(conn.host);
-    const pool = await sql.connect(config);
+    const pool = await new sql.ConnectionPool(config).connect();
 
     const result = await pool.request().query(userQuery);
 
@@ -71,7 +71,7 @@ router.get("/articulos/:connectionId", async (req, res) => {
     if (!conn) return res.status(404).json({ success: false, message: "Conexión no encontrada" });
     
     const config = makeMssqlConfig(conn.host);
-    const pool = await sql.connect(config);
+    const pool = await new sql.ConnectionPool(config).connect();
     
     // Parametrizado (no hay parámetros del usuario aquí, pero uso request para consistencia)
     const request = pool.request();
@@ -104,7 +104,7 @@ router.post("/toggle-web", async (req, res) => {
     if (!conn) return res.status(404).json({ success: false, message: "Conexión no encontrada" });
 
     const config = makeMssqlConfig(conn.host);
-    const pool = await sql.connect(config);
+    const pool = await new sql.ConnectionPool(config).connect();
     const request = pool.request();
 
     

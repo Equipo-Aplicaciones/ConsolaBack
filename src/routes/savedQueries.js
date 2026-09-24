@@ -190,7 +190,7 @@ router.post("/:id/run", async (req, res) => {
     }
 
     const config = makeMssqlConfig(conn.host);
-    const pool = await sql.connect(config);
+    const pool = await new sql.ConnectionPool(config).connect();
 
     try {
       const result = await pool.request().query(sqlValidado);
