@@ -16,9 +16,10 @@ router.use(requireAuth);
  * ============================================================
  * GET /connections/logs
  *
- * Historial de cambios sobre locales (alta/edición/baja/estado)
- * y sobre sus horarios base, para la solapa "Logs" de
- * Administración de Locales.
+ * Historial de cambios de Horarios Base, Artículos y Menú Locales,
+ * para la solapa "Logs" de Administración de Locales. No incluye
+ * altas/ediciones/baja/estado/características de la ficha del local
+ * (eso pertenece a la administración de Locales, no a esta pantalla).
  * ============================================================
  */
 router.get("/logs", allowRoles("Admin", "Comercial", "Zonal"), async (req, res) => {
@@ -28,10 +29,19 @@ router.get("/logs", allowRoles("Admin", "Comercial", "Zonal"), async (req, res) 
     const query = mgmtDb("menu_logs as l")
       .leftJoin("connections as c", function () {
         this.on(
-          mgmtDb.raw(`l.entidad_id = CAST(c.id AS TEXT)`),
+          mgmtDb.raw(
+            `(l.entidad = 'horario_base' AND l.entidad_id = CAST(c.id AS TEXT)) OR (l.entidad = 'menu_local' AND l.entidad_id = CAST(c."codLocal" AS TEXT))`,
+          ),
         );
       })
-      .whereIn("l.entidad", ["connection", "horario_base"])
+      .leftJoin("articulos as a", function () {
+        this.on(
+          mgmtDb.raw(
+            `l.entidad = 'articulo' AND (CAST(a.id AS TEXT) = l.entidad_id OR a.codigo = l.entidad_id)`,
+          ),
+        );
+      })
+      .whereIn("l.entidad", ["horario_base", "articulo", "menu_local"])
       .select(
         "l.id",
         "l.created_at",
@@ -44,6 +54,8 @@ router.get("/logs", allowRoles("Admin", "Comercial", "Zonal"), async (req, res) 
         "l.rol",
         "c.name as local_nombre",
         "c.codLocal as codlocal",
+        "a.nombre as articulo_nombre",
+        "a.codigo as articulo_codigo",
       )
       .orderBy("l.created_at", "desc");
 
