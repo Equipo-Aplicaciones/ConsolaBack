@@ -9,8 +9,6 @@ const USUARIOS = [
   {
     nombre: "Alfonso Goldschmidt",
     email: "agoldschmidt@tarragona.cl"
-  },{
-
   }
 ];
 
@@ -100,7 +98,7 @@ async function ejecutarTareaCodigosQuemables() {
 
       await enviarCorreoAlerta({
         to: usuario.email,
-        bcc: "auditoria@empresa.cl",
+        bcc: "aplicaciones@tarragona.cl",
         subject: "Asignación de códigos de descuento",
         html,
         usarCc: false,
