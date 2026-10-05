@@ -1,4 +1,5 @@
 import express from "express";
+import multer from "multer";
 import db from "../db/adminDb.js";
 import { allowRoles } from "../middleware/roleMiddleware.js";
 
@@ -2038,6 +2039,155 @@ router.post(
           error:
             "Error cancelando gestión"
         });
+    }
+  }
+);
+
+/* =========================================================
+   INSTRUCTIVOS (PDF) DE UNA GESTIÓN
+
+   Admin / N2: listar, subir y eliminar.
+   N1: listar y ver, solo si es encargado de la gestión.
+========================================================= */
+
+const MAX_INSTRUCTIVO_BYTES = 10 * 1024 * 1024;
+
+const subirInstructivo = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: MAX_INSTRUCTIVO_BYTES, files: 1 }
+}).single("file");
+
+router.get("/:id/instructivos", allowRoles("Admin", "N1", "N2"), async (req, res) => {
+  try {
+    const gestion = await obtenerGestionPermitida(req.params.id, req.user);
+
+    if (!gestion) {
+      return res.status(404).json({ error: "Gestión no encontrada" });
+    }
+
+    const instructivos = await db("gestion_instructivos as i")
+      .leftJoin("users as u", "u.id", "i.subido_por")
+      .select(
+        "i.id",
+        "i.nombre_archivo",
+        "i.tamano",
+        "i.created_at",
+        "u.full_name as subido_por_nombre"
+      )
+      .where("i.gestion_id", gestion.id)
+      .orderBy("i.created_at", "asc");
+
+    res.json(instructivos);
+  } catch (error) {
+    console.error("Error listando instructivos:", error);
+    res.status(500).json({ error: "Error listando instructivos" });
+  }
+});
+
+router.get(
+  "/:id/instructivos/:instructivoId/archivo",
+  allowRoles("Admin", "N1", "N2"),
+  async (req, res) => {
+    try {
+      const gestion = await obtenerGestionPermitida(req.params.id, req.user);
+
+      if (!gestion) {
+        return res.status(404).json({ error: "Gestión no encontrada" });
+      }
+
+      const instructivo = await db("gestion_instructivos")
+        .where({ id: req.params.instructivoId, gestion_id: gestion.id })
+        .first();
+
+      if (!instructivo) {
+        return res.status(404).json({ error: "Instructivo no encontrado" });
+      }
+
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Length", instructivo.contenido.length);
+      res.setHeader(
+        "Content-Disposition",
+        `inline; filename*=UTF-8''${encodeURIComponent(instructivo.nombre_archivo)}`
+      );
+      res.send(instructivo.contenido);
+    } catch (error) {
+      console.error("Error obteniendo instructivo:", error);
+      res.status(500).json({ error: "Error obteniendo instructivo" });
+    }
+  }
+);
+
+router.post("/:id/instructivos", allowRoles("Admin", "N2"), (req, res) => {
+  subirInstructivo(req, res, async (err) => {
+    if (err) {
+      const mensaje =
+        err.code === "LIMIT_FILE_SIZE"
+          ? "El PDF supera el máximo de 10 MB"
+          : "Error recibiendo el archivo";
+
+      return res.status(400).json({ error: mensaje });
+    }
+
+    try {
+      const gestion = await obtenerGestionPermitida(req.params.id, req.user);
+
+      if (!gestion) {
+        return res.status(404).json({ error: "Gestión no encontrada" });
+      }
+
+      const archivo = req.file;
+
+      if (!archivo) {
+        return res.status(400).json({ error: "Debe seleccionar un archivo" });
+      }
+
+      const esPdf =
+        archivo.mimetype === "application/pdf" &&
+        archivo.buffer.subarray(0, 5).toString("latin1") === "%PDF-";
+
+      if (!esPdf) {
+        return res.status(400).json({ error: "Solo se permiten archivos PDF" });
+      }
+
+      const nombreArchivo = Buffer.from(archivo.originalname, "latin1")
+        .toString("utf8")
+        .slice(0, 255);
+
+      const [creado] = await db("gestion_instructivos")
+        .insert({
+          gestion_id: gestion.id,
+          nombre_archivo: nombreArchivo,
+          tamano: archivo.size,
+          contenido: archivo.buffer,
+          subido_por: req.user.id
+        })
+        .returning(["id", "nombre_archivo", "tamano", "created_at"]);
+
+      res.status(201).json(creado);
+    } catch (error) {
+      console.error("Error subiendo instructivo:", error);
+      res.status(500).json({ error: "Error subiendo instructivo" });
+    }
+  });
+});
+
+router.delete(
+  "/:id/instructivos/:instructivoId",
+  allowRoles("Admin", "N2"),
+  async (req, res) => {
+    try {
+      const eliminados = await db("gestion_instructivos")
+        .where({ id: req.params.instructivoId, gestion_id: req.params.id })
+        .del();
+
+      if (!eliminados) {
+        return res.status(404).json({ error: "Instructivo no encontrado" });
+      }
+
+      res.json({ ok: true });
+    } catch (error) {
+      console.error("Error eliminando instructivo:", error);
+      res.status(500).json({ error: "Error eliminando instructivo" });
     }
   }
 );
