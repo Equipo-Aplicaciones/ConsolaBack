@@ -12,11 +12,39 @@ const subirPdf = multer({
   limits: { fileSize: MAX_PDF_BYTES, files: 1 }
 }).single("file");
 
+const ROLES_VALIDOS = ["Admin", "N1", "N2", "Gerente", "RRHH", "Comercial", "Zonal"];
+
+// roles_visibles vacío = visible para todos; Admin siempre ve todo.
+function normalizarRoles(valor) {
+  let lista = valor;
+
+  if (typeof lista === "string") {
+    try {
+      lista = JSON.parse(lista);
+    } catch {
+      lista = [];
+    }
+  }
+
+  if (!Array.isArray(lista)) return [];
+
+  return [...new Set(lista.filter((rol) => ROLES_VALIDOS.includes(rol)))];
+}
+
+function puedeVer(documento, user) {
+  return (
+    user.role === "Admin" ||
+    documento.roles_visibles.length === 0 ||
+    documento.roles_visibles.includes(user.role)
+  );
+}
+
 const COLUMNAS_LISTADO = [
   "d.id",
   "d.titulo",
   "d.descripcion",
   "d.categoria",
+  "d.roles_visibles",
   "d.nombre_archivo",
   "d.tamano",
   "d.created_at",
@@ -36,13 +64,20 @@ function limpiarTexto(valor, max) {
 
 router.get("/", async (req, res) => {
   try {
-    const documentos = await db("ayuda_documentos as d")
+    const query = db("ayuda_documentos as d")
       .leftJoin("users as u", "u.id", "d.subido_por")
       .select(COLUMNAS_LISTADO)
       .orderBy("d.categoria", "asc")
       .orderBy("d.titulo", "asc");
 
-    res.json(documentos);
+    if (req.user.role !== "Admin") {
+      query.whereRaw(
+        "(cardinality(d.roles_visibles) = 0 OR ? = ANY(d.roles_visibles))",
+        [req.user.role]
+      );
+    }
+
+    res.json(await query);
   } catch (error) {
     console.error("Error listando documentos de ayuda:", error);
     res.status(500).json({ error: "Error listando documentos de ayuda" });
@@ -55,7 +90,7 @@ router.get("/:id/archivo", async (req, res) => {
       .where({ id: req.params.id })
       .first();
 
-    if (!documento) {
+    if (!documento || !puedeVer(documento, req.user)) {
       return res.status(404).json({ error: "Documento no encontrado" });
     }
 
@@ -116,6 +151,7 @@ router.post("/", allowRoles("Admin"), (req, res) => {
           titulo,
           descripcion: limpiarTexto(req.body.descripcion, 2000),
           categoria: limpiarTexto(req.body.categoria, 100),
+          roles_visibles: normalizarRoles(req.body.roles),
           nombre_archivo: nombreArchivo,
           tamano: archivo.size,
           contenido: archivo.buffer,
@@ -145,6 +181,7 @@ router.put("/:id", allowRoles("Admin"), async (req, res) => {
         titulo,
         descripcion: limpiarTexto(req.body.descripcion, 2000),
         categoria: limpiarTexto(req.body.categoria, 100),
+        roles_visibles: normalizarRoles(req.body.roles),
         updated_at: new Date()
       });
 
