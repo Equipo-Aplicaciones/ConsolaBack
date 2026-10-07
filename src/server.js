@@ -28,6 +28,7 @@ import gestionesRoutes from "./routes/gestiones.js";
 import estadosRoutes from "./routes/estados.js";
 import savedQueriesRouter from "./routes/savedQueries.js";
 import ayudaRouter from "./routes/ayuda.js";
+import editorMenuRouter from "./routes/editorMenu.js";
 
 
 //import startDailyAlert from "./jobs/dailyAlert.js";
@@ -97,7 +98,7 @@ app.use("/auth", authRouter);
 
 // ✅ SPA fallback (debe ir al final, después de todas las rutas)
 if (serveFrontend) {
-  app.get(/^(?!\/(auth|docs-ayuda|connections|query|logs|users|reports|menu-locales|articulos|horarios-base|horarios-especiales|ventas|actualizaciones|notificaciones|scheduled-tasks | vendedores | empresas | totems | gestiones | estados | saved-queries )).*/, (req, res, next) => {
+  app.get(/^(?!\/(auth|docs-ayuda|editor-menu|connections|query|logs|users|reports|menu-locales|articulos|horarios-base|horarios-especiales|ventas|actualizaciones|notificaciones|scheduled-tasks | vendedores | empresas | totems | gestiones | estados | saved-queries )).*/, (req, res, next) => {
     // Excluir rutas API del backend
     if (
       req.originalUrl.startsWith("/auth") ||
@@ -120,7 +121,8 @@ if (serveFrontend) {
       req.originalUrl.startsWith("/gestiones") ||
       req.originalUrl.startsWith("/estados") ||
       req.originalUrl.startsWith("/saved-queries") ||
-      req.originalUrl.startsWith("/docs-ayuda")
+      req.originalUrl.startsWith("/docs-ayuda") ||
+      req.originalUrl.startsWith("/editor-menu")
     ) {
       return next();
     }
@@ -151,6 +153,7 @@ app.use("/gestiones",gestionesRoutes)
 app.use("/estados",estadosRoutes)
 app.use("/saved-queries", savedQueriesRouter)
 app.use("/docs-ayuda", ayudaRouter)
+app.use("/editor-menu", editorMenuRouter)
 
 // Cron jobs
 //startDailyAlert();
