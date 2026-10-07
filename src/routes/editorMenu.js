@@ -28,6 +28,17 @@ function normalizarCambios(valor) {
   }
 }
 
+function normalizarDetalle(valor) {
+  try {
+    const lista = JSON.parse(valor);
+    return Array.isArray(lista)
+      ? lista.filter((x) => x && typeof x === "object" && !Array.isArray(x)).slice(0, 5000)
+      : [];
+  } catch {
+    return [];
+  }
+}
+
 /* =========================================================
    GET /editor-menu/versiones
    Historial de menús exportados (sin el contenido del JSON).
@@ -55,6 +66,41 @@ router.get("/versiones", async (req, res) => {
   } catch (error) {
     console.error("Error listando versiones del editor de menú:", error);
     res.status(500).json({ error: "Error listando el historial" });
+  }
+});
+
+/* =========================================================
+   GET /editor-menu/versiones/:id
+   Metadatos y detalle estructurado de los cambios (sin el JSON).
+========================================================= */
+
+router.get("/versiones/:id", async (req, res) => {
+  try {
+    const version = await db("editor_menu_versiones as v")
+      .leftJoin("users as u", "u.id", "v.subido_por")
+      .select(
+        "v.id",
+        "v.agregador",
+        "v.nombre_archivo",
+        "v.descripcion",
+        "v.cambios",
+        "v.cambios_detalle",
+        "v.cantidad_imagenes",
+        "v.tamano",
+        "v.created_at",
+        "u.full_name as usuario_nombre"
+      )
+      .where("v.id", req.params.id)
+      .first();
+
+    if (!version) {
+      return res.status(404).json({ error: "Versión no encontrada" });
+    }
+
+    res.json(version);
+  } catch (error) {
+    console.error("Error obteniendo detalle de la versión:", error);
+    res.status(500).json({ error: "Error obteniendo la versión" });
   }
 });
 
@@ -137,6 +183,7 @@ router.post("/versiones", (req, res) => {
           nombre_archivo: nombreArchivo,
           descripcion,
           cambios: JSON.stringify(normalizarCambios(req.body.cambios)),
+          cambios_detalle: JSON.stringify(normalizarDetalle(req.body.cambios_detalle)),
           cantidad_imagenes: Math.max(0, parseInt(req.body.cantidad_imagenes, 10) || 0),
           contenido,
           tamano: archivo.size,
