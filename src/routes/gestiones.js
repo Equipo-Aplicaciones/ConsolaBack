@@ -36,7 +36,7 @@ async function obtenerGestionPermitida(id, user, trx = db) {
    - Solo ve las gestiones donde es encargado.
 
    Filtros:
-   ?estado=PENDIENTE
+   ?estado=PENDIENTE (o varios: ?estado=PENDIENTE,SUSPENDIDA)
    ?empresa_id=2
    ?desde=2026-08-01
    ?hasta=2026-08-31
@@ -86,12 +86,14 @@ router.get("/", allowRoles("Admin", "N1", "N2"),async (req, res) => {
       ========================= */
 
       if (estado) {
-        query.where(
-          "e.codigo",
-          String(estado)
-            .trim()
-            .toUpperCase()
-        );
+        const codigos = String(estado)
+          .split(",")
+          .map(codigo => codigo.trim().toUpperCase())
+          .filter(Boolean);
+
+        if (codigos.length) {
+          query.whereIn("e.codigo", codigos);
+        }
       }
 
       /* =========================
