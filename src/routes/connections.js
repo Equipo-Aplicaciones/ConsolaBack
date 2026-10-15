@@ -22,9 +22,25 @@ router.use(requireAuth);
  * (eso pertenece a la administración de Locales, no a esta pantalla).
  * ============================================================
  */
+// No todos los ambientes tienen la columna articulos.nombre; se detecta una vez y,
+// si falta, se usa la descripción del artículo como nombre.
+let articulosTieneNombre;
+
+async function expresionNombreArticulo() {
+  if (articulosTieneNombre === undefined) {
+    const resultado = await mgmtDb.raw(
+      "select 1 from information_schema.columns where table_name = 'articulos' and column_name = 'nombre' limit 1",
+    );
+    articulosTieneNombre = resultado.rows.length > 0;
+  }
+
+  return articulosTieneNombre ? "a.nombre" : "a.descripcion";
+}
+
 router.get("/logs", allowRoles("Admin", "Comercial", "Zonal"), async (req, res) => {
   try {
     const { date_from, date_to, usuario, local } = req.query;
+    const nombreArticulo = await expresionNombreArticulo();
 
     const query = mgmtDb("menu_logs as l")
       .leftJoin("connections as c", function () {
@@ -54,7 +70,7 @@ router.get("/logs", allowRoles("Admin", "Comercial", "Zonal"), async (req, res) 
         "l.rol",
         "c.name as local_nombre",
         "c.codLocal as codlocal",
-        "a.nombre as articulo_nombre",
+        mgmtDb.raw(`${nombreArticulo} as articulo_nombre`),
         "a.codigo as articulo_codigo",
       )
       .orderBy("l.created_at", "desc");
