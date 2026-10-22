@@ -430,14 +430,13 @@ async function obtenerEstadoTotem(
 export async function monitorearTotems() {
   const fecha = obtenerFechaActual();
   /**OBTENER LOCALES
-   * Por ahora monitoreamos solamente empresa_id = 2
-   * (Tarragona).
+   * Todos los locales activos con kiosko, de cualquier empresa.
+   * Cuántos tótems tiene cada local lo define su campo ck.
    */
 
   const conexiones = await mgmtDb("connections")
     .where("activo", true)
     .where("kiosko", true)
-    .where("empresa_id", 2)
     .select("id", "empresa_id", "codLocal", "name", "host", "ck");
 
 
