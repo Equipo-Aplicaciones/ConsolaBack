@@ -1,9 +1,38 @@
 import cron from "node-cron";
-import runScheduledTasks from "../services/scheduledTaskRunner.js";
+import runScheduledTasks, {
+  FASE_MANANA,
+  FASE_MEDIODIA
+} from "../services/scheduledTaskRunner.js";
 
 let ejecutando = false;
 
+// Un solo cron para todo el módulo. Una expresión no puede combinar "09:30" y "12:00", así que
+// dispara a las 09:00, 09:30, 12:00 y 12:30 y esta función decide si le toca hacer algo.
+// Tolerancia de 15 minutos por si el proceso llega atrasado a la hora.
+export function faseActual(fecha = new Date()) {
+  const partes = new Intl.DateTimeFormat("en-GB", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+    timeZone: "America/Santiago"
+  }).formatToParts(fecha);
+
+  const hora = Number(partes.find((p) => p.type === "hour").value);
+  const minuto = Number(partes.find((p) => p.type === "minute").value);
+
+  if (hora === 9 && minuto >= 15 && minuto < 45) return FASE_MANANA;
+  if (hora === 12 && minuto < 15) return FASE_MEDIODIA;
+
+  return null;
+}
+
 async function ejecutarScheduledTasks() {
+  const fase = faseActual();
+
+  if (!fase) {
+    return;
+  }
+
   if (ejecutando) {
     console.log(
       "[CRON PRODUCTOS] Ejecución omitida: proceso anterior aún activo."
@@ -16,10 +45,12 @@ async function ejecutarScheduledTasks() {
 
   try {
     console.log(
-      "[CRON PRODUCTOS] Iniciando Activaciones/Desactivaciones de Productos..."
+      fase === FASE_MANANA
+        ? "[CRON PRODUCTOS] Iniciando Activaciones/Desactivaciones de Productos..."
+        : "[CRON PRODUCTOS] Iniciando Desactivaciones de mediodía..."
     );
 
-    await runScheduledTasks();
+    await runScheduledTasks({ fase });
 
   } catch (error) {
     console.error(
@@ -41,7 +72,7 @@ async function ejecutarScheduledTasks() {
 
 export const initScheduledTaskJob = () => {
   cron.schedule(
-    "30 9 * * *",
+    "0,30 9,12 * * *",
     ejecutarScheduledTasks,
     {
       timezone: "America/Santiago"
