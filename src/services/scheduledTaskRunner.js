@@ -112,19 +112,32 @@ async function ejecutarToggleArticulo(pool, tarea, invisibl) {
     ? tarea.campo_objetivo
     : "invisibl";
 
+  // "invisibl" es un indicador de ocultar (1 = oculto); "web" es de mostrar (1 = visible en la web).
+  const oculto = Number(invisibl) ? 1 : 0;
+  const valor = campo === "web" ? 1 - oculto : oculto;
+
+  // articulo.codigo es texto: se compara como texto (no como número) para no convertir toda la columna.
   const request = pool.request();
   const parametros = codigos.map((c, i) => {
-    request.input(`c${i}`, sql.Int, Number(String(c).trim()));
+    request.input(`c${i}`, sql.VarChar(30), String(c).trim());
     return `@c${i}`;
   });
 
-  await request.query(`
+  const resultado = await request.query(`
     UPDATE articulo
-    SET ${campo} = ${Number(invisibl) ? 1 : 0}
+    SET ${campo} = ${valor}
     WHERE codigo IN (${parametros.join(",")})
   `);
 
-  return "Tarea ejecutada correctamente";
+  const filas = resultado.rowsAffected.reduce((a, b) => a + b, 0);
+
+  if (!filas) {
+    throw new Error(
+      `Ningún artículo del local coincide con los códigos de la tarea (${codigos.join(", ")})`
+    );
+  }
+
+  return `Tarea ejecutada correctamente (${filas} artículo(s) actualizado(s))`;
 }
 
 async function ejecutarVaciarTabla(pool, tarea) {
