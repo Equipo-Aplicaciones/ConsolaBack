@@ -25,11 +25,22 @@ function textoResultado(nombre, { conexiones, errores }) {
   return `${nombre} ejecutada en ${conexiones.length - errores.length} de ${conexiones.length} locales (${errores.length} con error)`;
 }
 
+// Valor de dia_activar / dia_desactivar que significa "todos los días"
+const DIA_TODOS = 0;
+
+// Fases de la corrida automática: a las 09:30 (MANANA) se activa; a las 12:00 (MEDIODIA) solo se
+// desactivan las tareas que se activan ese mismo día.
+export const FASE_MANANA = "MANANA";
+export const FASE_MEDIODIA = "MEDIODIA";
+
 function obtenerDiaSemana() {
-  // JS: domingo=0 ... sábado=6
-  // Nosotros: lunes=1 ... domingo=7
-  const dia = new Date().getDay();
-  return dia === 0 ? 7 : dia;
+  // lunes=1 ... domingo=7, según la hora de Santiago (no la del servidor)
+  const dia = new Intl.DateTimeFormat("en-US", {
+    weekday: "short",
+    timeZone: "America/Santiago"
+  }).format(new Date());
+
+  return { Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6, Sun: 7 }[dia];
 }
 
 async function registrarResultado(taskId, connectionId, estado, mensaje) {
@@ -173,9 +184,10 @@ async function ejecutarTareaEnLocales(tarea, invisibl, connectionIds) {
   return { conexiones, errores };
 }
 
-async function runScheduledTasks({ taskId = null, connectionIds = null } = {}) {
+async function runScheduledTasks({ taskId = null, connectionIds = null, fase = FASE_MANANA } = {}) {
 
   const diaSemana = obtenerDiaSemana();
+  const hoy = [diaSemana, DIA_TODOS];
   const resumenes = []; // por tarea ejecutada: locales totales y con error (lo usan las rutas manuales)
 
   //verificar si hay tareas activas para hoy
@@ -196,10 +208,11 @@ async function runScheduledTasks({ taskId = null, connectionIds = null } = {}) {
   if (taskId) {
     query.where("id", taskId);
   } else {
-    query.where("dia_activar", diaSemana);
+    query.whereIn("dia_activar", hoy);
   }
 
-  const tareas = await query;
+  // En la corrida del mediodía no se activa nada: solo se desactiva (más abajo).
+  const tareas = !taskId && fase === FASE_MEDIODIA ? [] : await query;
 
   //si hay tareas activas para hoy, ejecutamos cada una en los locales de sus propias empresas
   if (tareas.length > 0) {
@@ -340,13 +353,19 @@ async function runScheduledTasks({ taskId = null, connectionIds = null } = {}) {
 
   //verificar si hay tareas de desactivacion activas para hoy
   // (solo llega aquí la corrida automática diaria, ver el return de arriba)
-  const tareasoFF = await mgmtDb("scheduled_tasks")
-        .select("id", "codigo", "nombre","visible","requiere_confirmacion","campo_objetivo")
+  const candidatasOff = await mgmtDb("scheduled_tasks")
+        .select("id", "codigo", "nombre","visible","requiere_confirmacion","campo_objetivo","dia_activar")
         .where({
-          dia_desactivar: diaSemana,
           activo: true,
           tipo_accion: "TOGGLE_ARTICULO"
-        });
+        })
+        .whereIn("dia_desactivar", hoy);
+
+  // Una tarea que también se activa hoy (p. ej. "todos los días") se desactiva en la corrida del mediodía;
+  // si hoy solo le toca desactivar, se hace en la de la mañana como siempre.
+  const tareasoFF = candidatasOff.filter(
+    (t) => hoy.includes(t.dia_activar) === (fase === FASE_MEDIODIA)
+  );
   if (tareasoFF.length > 0) { //si hay tareas de desactivacion activas para hoy, las ejecutamos en los locales de sus propias empresas
     for(const tareaOff of tareasoFF) {
       if (tareaOff.requiere_confirmacion) {
