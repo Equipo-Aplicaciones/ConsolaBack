@@ -117,7 +117,6 @@ router.post("/", async (req, res) => {
     }
 
     const activo=true
-    const omitir_proxima_desactivacion=false
     const codigo=`${nombre.toUpperCase().replace(/\s+/g, "-")}`;
 
 
@@ -131,7 +130,6 @@ router.post("/", async (req, res) => {
         requiere_confirmacion,
         dia_activar: dia_activar ?? null,
         dia_desactivar: dia_desactivar ?? null,
-        omitir_proxima_desactivacion,
         tipo_accion: tipo_accion || "TOGGLE_ARTICULO",
         campo_objetivo: campo_objetivo || "invisibl",
         tabla_objetivo: tabla_objetivo ?? null
@@ -184,7 +182,6 @@ router.put("/:id", async (req, res) => {
       requiere_confirmacion,
       dia_activar,
       dia_desactivar,
-      omitir_proxima_desactivacion,
       tipo_accion,
       campo_objetivo,
       tabla_objetivo,
@@ -210,7 +207,6 @@ router.put("/:id", async (req, res) => {
         requiere_confirmacion,
         dia_activar: dia_activar ?? null,
         dia_desactivar: dia_desactivar ?? null,
-        omitir_proxima_desactivacion,
         tipo_accion: tipo_accion || "TOGGLE_ARTICULO",
         campo_objetivo: campo_objetivo || "invisibl",
         tabla_objetivo: tabla_objetivo ?? null,

@@ -341,7 +341,7 @@ async function runScheduledTasks({ taskId = null, connectionIds = null } = {}) {
   //verificar si hay tareas de desactivacion activas para hoy
   // (solo llega aquí la corrida automática diaria, ver el return de arriba)
   const tareasoFF = await mgmtDb("scheduled_tasks")
-        .select("id", "codigo", "nombre","visible","requiere_confirmacion","campo_objetivo","omitir_proxima_desactivacion")
+        .select("id", "codigo", "nombre","visible","requiere_confirmacion","campo_objetivo")
         .where({
           dia_desactivar: diaSemana,
           activo: true,
@@ -349,24 +349,6 @@ async function runScheduledTasks({ taskId = null, connectionIds = null } = {}) {
         });
   if (tareasoFF.length > 0) { //si hay tareas de desactivacion activas para hoy, las ejecutamos en los locales de sus propias empresas
     for(const tareaOff of tareasoFF) {
-      // "Omitir próxima desactivación": esta vez no se desactiva (ni se pide confirmación) y la marca se
-      // limpia para que la desactivación siguiente corra con normalidad.
-      if (tareaOff.omitir_proxima_desactivacion) {
-        await mgmtDb("scheduled_tasks")
-          .where("id", tareaOff.id)
-          .update({ omitir_proxima_desactivacion: false });
-
-        await mgmtDb("notificaciones").insert({
-          titulo: "Desactivación omitida",
-          contenido: `${tareaOff.nombre}: se omitió la desactivación de hoy; la próxima se ejecutará con normalidad`,
-          leido: false,
-          url: `scheduled-tasks`,
-          created_at: new Date()
-        });
-
-        continue;
-      }
-
       if (tareaOff.requiere_confirmacion) {
         const contenido = `${tareaOff.nombre} requiere confirmación para desactivación`;
         // tareas que requieren confirmación no se ejecutan automáticamente, se genera una notificación para que el usuario confirme la desactivación
