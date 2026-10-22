@@ -5,6 +5,25 @@ import { enviarCorreoAlerta } from "../services/mailService.js";
 
 const CAMPOS_TOGGLE_PERMITIDOS = ["invisibl", "web"];
 const TABLAS_VACIABLES = ["comandae"];
+const CODIGO_ARTICULO = /^\d{1,9}$/;
+
+const escapar = (texto) =>
+  String(texto ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+
+function textoResultado(nombre, { conexiones, errores }) {
+  if (!conexiones.length) {
+    return `${nombre}: sin locales activos asociados`;
+  }
+
+  if (!errores.length) {
+    return `${nombre} Ejecutada en ${conexiones.length} locales`;
+  }
+
+  return `${nombre} ejecutada en ${conexiones.length - errores.length} de ${conexiones.length} locales (${errores.length} con error)`;
+}
 
 function obtenerDiaSemana() {
   // JS: domingo=0 ... sábado=6
@@ -70,14 +89,28 @@ async function ejecutarToggleArticulo(pool, tarea, invisibl) {
     return "Sin artículos asociados a la tarea";
   }
 
+  const invalidos = codigos.filter(
+    (c) => !CODIGO_ARTICULO.test(String(c).trim())
+  );
+
+  if (invalidos.length) {
+    throw new Error(`Códigos de artículo inválidos: ${invalidos.join(", ")}`);
+  }
+
   const campo = CAMPOS_TOGGLE_PERMITIDOS.includes(tarea.campo_objetivo)
     ? tarea.campo_objetivo
     : "invisibl";
 
-  await pool.request().query(`
+  const request = pool.request();
+  const parametros = codigos.map((c, i) => {
+    request.input(`c${i}`, sql.Int, Number(String(c).trim()));
+    return `@c${i}`;
+  });
+
+  await request.query(`
     UPDATE articulo
-    SET ${campo} = ${invisibl}
-    WHERE codigo IN (${codigos.join(",")})
+    SET ${campo} = ${Number(invisibl) ? 1 : 0}
+    WHERE codigo IN (${parametros.join(",")})
   `);
 
   return "Tarea ejecutada correctamente";
@@ -111,8 +144,10 @@ async function ejecutarTareaEnLocales(tarea, invisibl, connectionIds) {
     console.log(
       `ℹ️ Tarea ${tarea.codigo}: sin conexiones activas para sus empresas asociadas`
     );
-    return conexiones;
+    return { conexiones, errores: [] };
   }
+
+  const errores = [];
 
   for (const connRow of conexiones) {
     try {
@@ -126,16 +161,22 @@ async function ejecutarTareaEnLocales(tarea, invisibl, connectionIds) {
         await pool.close();
       }
     } catch (err) {
+      errores.push({
+        codLocal: connRow.codLocal,
+        nombre: connRow.name,
+        mensaje: err.message
+      });
       await registrarResultado(tarea.id, connRow.id, "ERROR", err.message);
     }
   }
 
-  return conexiones;
+  return { conexiones, errores };
 }
 
 async function runScheduledTasks({ taskId = null, connectionIds = null } = {}) {
 
   const diaSemana = obtenerDiaSemana();
+  const resumenes = []; // por tarea ejecutada: locales totales y con error (lo usan las rutas manuales)
 
   //verificar si hay tareas activas para hoy
   // (las de tipo OTRO las ejecuta su propio cron aparte — este runner nunca las toca)
@@ -162,9 +203,7 @@ async function runScheduledTasks({ taskId = null, connectionIds = null } = {}) {
 
   //si hay tareas activas para hoy, ejecutamos cada una en los locales de sus propias empresas
   if (tareas.length > 0) {
-    const tareasToggle = tareas.filter(
-      (t) => t.tipo_accion !== "VACIAR_TABLA"
-    );
+    const resultadosToggle = [];
 
     for (const tarea of tareas) { //recorremos cada tarea y ejecutamos en los locales de sus empresas asociadas
       let invisibl = 0;
@@ -173,14 +212,27 @@ async function runScheduledTasks({ taskId = null, connectionIds = null } = {}) {
         invisibl = tarea.visible ? 0 : 1;
       }
 
-      const conexiones = await ejecutarTareaEnLocales(
+      const resultado = await ejecutarTareaEnLocales(
         tarea,
         invisibl,
         connectionIds
       );
+      const { conexiones, errores } = resultado;
+
+      resumenes.push({
+        id: tarea.id,
+        codigo: tarea.codigo,
+        nombre: tarea.nombre,
+        total: conexiones.length,
+        errores: errores.length
+      });
+
+      if (tarea.tipo_accion !== "VACIAR_TABLA") {
+        resultadosToggle.push({ tarea, ...resultado });
+      }
 
       console.log(
-        `Fin de activación de ${tarea.codigo} (${conexiones.length} locales), creando notificacion`
+        `Fin de activación de ${tarea.codigo} (${conexiones.length} locales, ${errores.length} con error), creando notificacion`
       );
 
       if (taskId === null) { //si no se especifica un taskId, se ejecutan todas las tareas activas para hoy y se envía una notificación
@@ -188,18 +240,32 @@ async function runScheduledTasks({ taskId = null, connectionIds = null } = {}) {
           await mgmtDb("scheduled_tasks")
             .where("id", tarea.id)
             .update({ ultima_ejecucion: new Date() });
+
+          // Vaciar tabla no genera aviso si sale bien; si falla en algún local, se notifica
+          if (errores.length || !conexiones.length) {
+            await mgmtDb("notificaciones").insert({
+              titulo: "Error al vaciar tabla",
+              contenido: textoResultado(tarea.nombre, resultado),
+              leido: false,
+              url: `scheduled-tasks`,
+              created_at: new Date()
+            });
+          }
         } else {
-          // Guardar notificación de activación de productos
-          const contenido = `${tarea.nombre} Ejecutada en ${conexiones.length} locales`;
+          // Guardar notificación de activación de productos (con los locales que fallaron, si hubo)
           await mgmtDb("notificaciones").insert({
-            titulo: "Alerta de activación de productos",
-            contenido,
+            titulo:
+              errores.length || !conexiones.length
+                ? "Error en activación de productos"
+                : "Alerta de activación de productos",
+            contenido: textoResultado(tarea.nombre, resultado),
             leido: false,
             url: `scheduled-tasks`,
             created_at: new Date()
           });
 
-          //modifica el campo visible de la tabla scheduled_tasks para que no se vuelva a ejecutar la tarea hasta el siguiente día de activación
+          // `visible` guarda el estado deseado (lo usa "Reintentar" para repetir el mismo cambio en los locales
+          // con error), así que se actualiza aunque algún local haya fallado.
           await mgmtDb("scheduled_tasks")
             .where("id", tarea.id)
             .update({ visible: true, ultima_ejecucion: new Date() });
@@ -208,19 +274,38 @@ async function runScheduledTasks({ taskId = null, connectionIds = null } = {}) {
     }
 
     //Envio de correo (solo para tareas de activación/desactivación de artículos)
-    if (taskId === null && tareasToggle.length > 0) {
-      const subject = `✅ ${tareasToggle.length} promoción(es) ejecutada(s) automáticamente`;
-      const lista = tareasToggle
-        .map( t => `<li><strong>${t.codigo}</strong> - ${t.nombre}</li>`)
+    if (taskId === null && resultadosToggle.length > 0) {
+      const conProblemas = resultadosToggle.filter(
+        (r) => r.errores.length || !r.conexiones.length
+      );
+      const subject = conProblemas.length
+        ? `⚠️ ${resultadosToggle.length} promoción(es) ejecutada(s) automáticamente, ${conProblemas.length} con problemas`
+        : `✅ ${resultadosToggle.length} promoción(es) ejecutada(s) automáticamente`;
+      const lista = resultadosToggle
+        .map(({ tarea: t, conexiones, errores }) => {
+          const detalle = !conexiones.length
+            ? " — ⚠ sin locales activos asociados"
+            : errores.length
+              ? ` — ⚠ ${errores.length} de ${conexiones.length} locales con error:<ul>${errores
+                  .slice(0, 15)
+                  .map(
+                    (e) =>
+                      `<li>${escapar(e.codLocal)} - ${escapar(e.nombre)}: ${escapar(e.mensaje)}</li>`
+                  )
+                  .join("")}${errores.length > 15 ? `<li>…y ${errores.length - 15} más</li>` : ""}</ul>`
+              : ` — ${conexiones.length} locales`;
+
+          return `<li><strong>${escapar(t.codigo)}</strong> - ${escapar(t.nombre)}${detalle}</li>`;
+        })
         .join("");
 
       const html = `
         <div style="font-family:Arial,Helvetica,sans-serif;font-size:14px">
           <h2>Promociones ejecutadas automáticamente</h2>
           <p>
-            El proceso automático ejecutó correctamente
-            <strong>${tareasToggle.length}</strong>
-            promoción(es).
+            El proceso automático ejecutó
+            <strong>${resultadosToggle.length}</strong>
+            promoción(es)${conProblemas.length ? `, <strong>${conProblemas.length}</strong> con problemas (revisar en Tareas → Resultados)` : " correctamente"}.
           </p>
           <ul>${lista}</ul>
           <p>
@@ -250,7 +335,7 @@ async function runScheduledTasks({ taskId = null, connectionIds = null } = {}) {
   // (lee el checkbox "Producto Visible" y aplica ese estado al POS) — dejar
   // correr este bloque también pisaría ese resultado.
   if (taskId) {
-    return;
+    return { resumenes };
   }
 
   //verificar si hay tareas de desactivacion activas para hoy
@@ -303,13 +388,15 @@ async function runScheduledTasks({ taskId = null, connectionIds = null } = {}) {
               to: "aplicaciones@tarragona.cl"
             });
       } else {
-        const conexionesOff = await ejecutarTareaEnLocales(tareaOff, 1, null);
+        const resultadoOff = await ejecutarTareaEnLocales(tareaOff, 1, null);
 
-        // Guardar notificación de desactivación de productos
-        const contenido = `${tareaOff.nombre} Ejecutada en ${conexionesOff.length} locales`;
+        // Guardar notificación de desactivación de productos (con los locales que fallaron, si hubo)
         await mgmtDb("notificaciones").insert({
-            titulo: "Alerta de desactivación de productos",
-            contenido,
+            titulo:
+              resultadoOff.errores.length || !resultadoOff.conexiones.length
+                ? "Error en desactivación de productos"
+                : "Alerta de desactivación de productos",
+            contenido: textoResultado(tareaOff.nombre, resultadoOff),
             leido: false,
             url: `scheduled-tasks`,
             created_at: new Date()
@@ -323,6 +410,7 @@ async function runScheduledTasks({ taskId = null, connectionIds = null } = {}) {
     }
   }
 
+  return { resumenes };
 }
 
 export default runScheduledTasks;

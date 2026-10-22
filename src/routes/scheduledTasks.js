@@ -1,9 +1,30 @@
 import express from "express";
 import mgmtDb from "../db/adminDb.js";
 import runScheduledTasks from "../services/scheduledTaskRunner.js";
-import { requireAuth } from "../middleware/auth.js";
+import { allowRoles } from "../middleware/roleMiddleware.js";
 
 const router = express.Router();
+
+// Mismos roles que ven el módulo en Administración; el resto no puede llamar a la API.
+router.use(allowRoles("Admin", "N2"));
+
+const CODIGO_ARTICULO = /^\d{1,9}$/;
+
+function codigosInvalidos(articulos) {
+  return Array.isArray(articulos)
+    ? articulos.filter((c) => !CODIGO_ARTICULO.test(String(c).trim()))
+    : [];
+}
+
+function textoEjecucion(r, verbo) {
+  if (!r.total) {
+    return `${verbo}: la tarea no tiene locales activos asociados.`;
+  }
+
+  return r.errores
+    ? `${verbo} en ${r.total - r.errores} de ${r.total} locales; ${r.errores} con error (ver Resultados).`
+    : `${verbo} correctamente en ${r.total} locales.`;
+}
 
 /* EMPRESAS DISPONIBLES PARA ASOCIAR A UNA TAREA */
 
@@ -87,6 +108,14 @@ router.post("/", async (req, res) => {
       articulos,
       empresas
     } = req.body;
+    const invalidos = codigosInvalidos(articulos);
+
+    if (invalidos.length) {
+      return res.status(400).json({
+        message: `Códigos de artículo inválidos: ${invalidos.join(", ")}`
+      });
+    }
+
     const activo=true
     const omitir_proxima_desactivacion=false
     const codigo=`${nombre.toUpperCase().replace(/\s+/g, "-")}`;
@@ -162,6 +191,14 @@ router.put("/:id", async (req, res) => {
       articulos,
       empresas
     } = req.body;
+
+    const invalidos = codigosInvalidos(articulos);
+
+    if (invalidos.length) {
+      return res.status(400).json({
+        message: `Códigos de artículo inválidos: ${invalidos.join(", ")}`
+      });
+    }
 
     await mgmtDb("scheduled_tasks")
       .where("id", req.params.id)
@@ -281,11 +318,22 @@ router.post("/:id/run", async (req, res) => {
         message: "La tarea no existe."
       });
     }
-    await runScheduledTasks({ taskId: Number(taskId) });
+    const { resumenes } = await runScheduledTasks({ taskId: Number(taskId) });
+    const resumen = resumenes[0];
+
+    // El ejecutor solo toma tareas activas y que no sean de tipo OTRO
+    if (!resumen) {
+      return res.status(409).json({
+        ok: false,
+        message: "La tarea no se ejecutó: está inactiva o es de tipo OTRO."
+      });
+    }
 
     res.json({
-      ok: true,
-      message: "Tarea ejecutada correctamente."
+      ok: resumen.errores === 0 && resumen.total > 0,
+      message: textoEjecucion(resumen, "Tarea ejecutada"),
+      total: resumen.total,
+      errores: resumen.errores
     });
   } catch (err) {
     console.error(err);
@@ -327,13 +375,24 @@ router.post("/:id/retry", async (req, res) => {
 
     const connectionIds = fallidos.map(x => x.connection_id);
     // Ejecutar nuevamente solo esos locales
-    await runScheduledTasks({
+    const { resumenes } = await runScheduledTasks({
       taskId,
       connectionIds
     });
+    const resumen = resumenes[0];
+
+    if (!resumen) {
+      return res.status(409).json({
+        ok: false,
+        message: "El reintento no se ejecutó: la tarea está inactiva o es de tipo OTRO."
+      });
+    }
+
     res.json({
-      ok: true,
-      message: `Reintento ejecutado para ${connectionIds.length} locales.`
+      ok: resumen.errores === 0 && resumen.total > 0,
+      message: textoEjecucion(resumen, "Reintento ejecutado"),
+      total: resumen.total,
+      errores: resumen.errores
     });
 
   } catch (err) {
