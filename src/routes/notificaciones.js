@@ -47,14 +47,19 @@ router.get("/", async (req, res) => {
   try {
     const role = req.user.role;
     const urlsPermitidas = NOTIFICACIONES_POR_ROL[role] || [];
-    
-    if (!urlsPermitidas.length) {
-      return res.json([]);
-    }
 
+    // Las personales (usuario_id) le llegan solo a su destinatario; las demás siguen siendo por rol.
     const notificaciones = await mgmtDb("notificaciones")
         .where("leido", false)
-        .whereIn("url", urlsPermitidas)
+        .where(function () {
+          this.where("usuario_id", req.user.id);
+
+          if (urlsPermitidas.length) {
+            this.orWhere(function () {
+              this.whereNull("usuario_id").whereIn("url", urlsPermitidas);
+            });
+          }
+        })
         .orderBy("created_at", "desc");
 
     res.json(notificaciones); 
@@ -73,6 +78,9 @@ router.get("/url", async (req, res) => {
 
     const query = mgmtDb("notificaciones")
       .select("id","titulo","contenido","leido","created_at","url")
+      .where(function () {
+        this.whereNull("usuario_id").orWhere("usuario_id", req.user.id);
+      })
       .orderBy("created_at", "desc");
 
     if (url) {
