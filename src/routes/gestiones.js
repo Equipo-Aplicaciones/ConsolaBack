@@ -15,14 +15,29 @@ async function obtenerEstado(grupo, codigo, trx = db) {
     .first();
 }
 
-async function obtenerGestionPermitida(id, user, trx = db) {
-  const query = trx("gestiones").where({ id });
+/* Quién ve qué gestiones:
+   - Admin: todas.
+   - N2: solo las que creó o que le asignaron.
+   - N1: solo las que le asignaron (no puede crear).
+   `alias` es el alias de la tabla gestiones en la consulta, si lo tiene. */
+function restringirPorRol(query, user, alias = "") {
+  const col = (c) => (alias ? `${alias}.${c}` : c);
 
-  if (user.role === "N1") {
-    query.where("encargado_id", user.id);
+  if (user.role === "Admin") {
+    return query;
   }
 
-  return query.first();
+  if (user.role === "N2") {
+    return query.where(function () {
+      this.where(col("creado_por"), user.id).orWhere(col("encargado_id"), user.id);
+    });
+  }
+
+  return query.where(col("encargado_id"), user.id);
+}
+
+async function obtenerGestionPermitida(id, user, trx = db) {
+  return restringirPorRol(trx("gestiones").where({ id }), user).first();
 }
 
 /* =========================================================
@@ -72,14 +87,7 @@ router.get("/", allowRoles("Admin", "N1", "N2"),async (req, res) => {
         .orderBy( "g.fecha_inicio", "desc" )
         .orderBy( "g.id", "desc" );
 
-      /*
-       N1 solamente puede consultar
-       las gestiones que tiene asignadas.
-      */
-
-      if (req.user.role === "N1") {
-        query.where("g.encargado_id", req.user.id);
-      }
+      restringirPorRol(query, req.user, "g");
 
       /* =========================
          FILTRO ESTADO
@@ -496,13 +504,7 @@ router.put("/:id/encargado",allowRoles("Admin", "N2"), async (req, res) => {
       }
 
       const gestion =
-        await db(
-          "gestiones"
-        )
-          .where({
-            id
-          })
-          .first();
+        await obtenerGestionPermitida(id, req.user);
 
       if (!gestion) {
         return res
@@ -634,18 +636,7 @@ router.get("/:id", allowRoles("Admin", "N1", "N2"),async (req, res) => {
             id
           )
           .modify(
-            query => {
-              if (
-                req.user
-                  .role ===
-                "N1"
-              ) {
-                query.where(
-                  "g.encargado_id",
-                  req.user.id
-                );
-              }
-            }
+            query => restringirPorRol(query, req.user, "g")
           )
           .first();
 
@@ -1023,13 +1014,7 @@ router.put("/:id", allowRoles("Admin","N2"), async (req, res) => {
       } = req.body;
 
       const gestion =
-        await db(
-          "gestiones"
-        )
-          .where({
-            id
-          })
-          .first();
+        await obtenerGestionPermitida(id, req.user);
 
       if (!gestion) {
         return res
@@ -1155,13 +1140,7 @@ router.post("/:id/locales",allowRoles("Admin", "N2"), async (req, res) => {
       } = req.body;
 
       const gestion =
-        await trx(
-          "gestiones"
-        )
-          .where({
-            id
-          })
-          .first();
+        await obtenerGestionPermitida(id, req.user, trx);
 
       if (!gestion) {
         await trx.rollback();
@@ -2178,8 +2157,14 @@ router.delete(
   allowRoles("Admin", "N2"),
   async (req, res) => {
     try {
+      const gestion = await obtenerGestionPermitida(req.params.id, req.user);
+
+      if (!gestion) {
+        return res.status(404).json({ error: "Gestión no encontrada" });
+      }
+
       const eliminados = await db("gestion_instructivos")
-        .where({ id: req.params.instructivoId, gestion_id: req.params.id })
+        .where({ id: req.params.instructivoId, gestion_id: gestion.id })
         .del();
 
       if (!eliminados) {
