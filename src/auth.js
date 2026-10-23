@@ -9,6 +9,18 @@ dotenv.config();
 const router = express.Router();
 const JWT_SECRET = process.env.JWT_SECRET;
 
+// Campos del usuario que pueden viajar al navegador (nunca password_hash)
+export function datosPublicosUsuario(user) {
+  return {
+    id: user.id,
+    username: user.username,
+    full_name: user.full_name,
+    email: user.email,
+    role: user.role,
+    created_at: user.created_at
+  };
+}
+
 router.post("/login", async (req, res) => {
   const { username, password } = req.body;
   const user = await mgmtDb("users").where({ username }).first();
@@ -17,7 +29,7 @@ router.post("/login", async (req, res) => {
   if (!ok) return res.status(401).json({ error: "invalid credentials" });
   const token = jwt.sign({ id: user.id, username: user.username,role:user.role }, JWT_SECRET, { expiresIn: "4h" });
   
-  res.json({ token ,user});
+  res.json({ token, user: datosPublicosUsuario(user) });
 });
 
 // middleware para rutas protegidas
