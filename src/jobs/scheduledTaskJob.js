@@ -3,6 +3,7 @@ import runScheduledTasks, {
   FASE_MANANA,
   FASE_MEDIODIA
 } from "../services/scheduledTaskRunner.js";
+import { notificarGestionesQueInician } from "../services/gestionesAlertService.js";
 
 let ejecutando = false;
 
@@ -51,6 +52,18 @@ async function ejecutarScheduledTasks() {
     );
 
     await runScheduledTasks({ fase });
+
+    // Aviso a los encargados de las gestiones que inician hoy (misma corrida de la mañana, sin otro cron)
+    if (fase === FASE_MANANA) {
+      try {
+        const aviso = await notificarGestionesQueInician();
+        console.log(
+          `[CRON PRODUCTOS] Gestiones que inician hoy: ${aviso.gestiones}, avisos creados: ${aviso.notificaciones}`
+        );
+      } catch (error) {
+        console.error(`[CRON PRODUCTOS] Error avisando gestiones que inician: ${error.message}`);
+      }
+    }
 
   } catch (error) {
     console.error(
