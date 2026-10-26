@@ -1526,6 +1526,7 @@ router.post(
   "/:id/iniciar",
   allowRoles(
     "Admin",
+    "N1",
     "N2"
   ),
   async (req, res) => {
@@ -1560,6 +1561,26 @@ router.post(
           .json({
             error:
               "Estado EN_EJECUCION no configurado"
+          });
+      }
+
+      // Solo una gestión Pendiente se puede iniciar (evita reabrir una finalizada o cancelada)
+      const estadoPendiente =
+        await obtenerEstado(
+          "GESTION",
+          "PENDIENTE"
+        );
+
+      if (
+        !estadoPendiente ||
+        gestion.estado_id !==
+          estadoPendiente.id
+      ) {
+        return res
+          .status(409)
+          .json({
+            error:
+              "Solo se puede iniciar una gestión Pendiente"
           });
       }
 
