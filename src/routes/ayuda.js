@@ -213,4 +213,122 @@ router.delete("/:id", allowRoles("Admin"), async (req, res) => {
   }
 });
 
+/* =========================================================
+   CONTACTOS TELEFÓNICOS
+   GET: cualquier usuario autenticado. POST / PUT / DELETE: solo Admin.
+========================================================= */
+
+const TELEFONO_VALIDO = /^[\d+\s().,/-]{6,80}$/;
+
+// Devuelve { datos } o { error }. El enlace solo puede ser http(s), para no guardar cosas como javascript:
+function validarContacto(body) {
+  const nombre = limpiarTexto(body.nombre, 200);
+  const telefono = limpiarTexto(body.telefono, 80);
+  const link = limpiarTexto(body.link, 500);
+  const descripcion = limpiarTexto(body.descripcion, 2000);
+
+  if (!nombre) return { error: "El nombre es obligatorio" };
+  if (!telefono) return { error: "El teléfono es obligatorio" };
+
+  if (!TELEFONO_VALIDO.test(telefono)) {
+    return { error: "El teléfono solo puede llevar números, +, espacios y ( ) . , / -" };
+  }
+
+  if (link) {
+    try {
+      const { protocol } = new URL(link);
+
+      if (protocol !== "http:" && protocol !== "https:") {
+        return { error: "El enlace debe empezar con http:// o https://" };
+      }
+    } catch {
+      return { error: "El enlace no es una dirección válida (debe empezar con http:// o https://)" };
+    }
+  }
+
+  return {
+    datos: { nombre, telefono, link, descripcion, roles_visibles: normalizarRoles(body.roles) }
+  };
+}
+
+router.get("/contactos", async (req, res) => {
+  try {
+    const query = db("ayuda_contactos")
+      .select("id", "nombre", "telefono", "link", "descripcion", "roles_visibles", "updated_at")
+      .orderBy("nombre", "asc");
+
+    // roles_visibles vacío = todos los roles; el Admin siempre ve todo
+    if (req.user.role !== "Admin") {
+      query.whereRaw(
+        "(cardinality(roles_visibles) = 0 OR ? = ANY(roles_visibles))",
+        [req.user.role]
+      );
+    }
+
+    res.json(await query);
+  } catch (error) {
+    console.error("Error listando contactos de ayuda:", error);
+    res.status(500).json({ error: "Error listando contactos" });
+  }
+});
+
+router.post("/contactos", allowRoles("Admin"), async (req, res) => {
+  try {
+    const { datos, error } = validarContacto(req.body);
+
+    if (error) {
+      return res.status(400).json({ error });
+    }
+
+    const [creado] = await db("ayuda_contactos")
+      .insert({ ...datos, creado_por: req.user.id })
+      .returning(["id", "nombre", "telefono", "link", "descripcion", "roles_visibles", "updated_at"]);
+
+    res.status(201).json(creado);
+  } catch (error) {
+    console.error("Error creando contacto de ayuda:", error);
+    res.status(500).json({ error: "Error creando contacto" });
+  }
+});
+
+router.put("/contactos/:id", allowRoles("Admin"), async (req, res) => {
+  try {
+    const { datos, error } = validarContacto(req.body);
+
+    if (error) {
+      return res.status(400).json({ error });
+    }
+
+    const actualizados = await db("ayuda_contactos")
+      .where({ id: req.params.id })
+      .update({ ...datos, updated_at: new Date() });
+
+    if (!actualizados) {
+      return res.status(404).json({ error: "Contacto no encontrado" });
+    }
+
+    res.json({ ok: true });
+  } catch (error) {
+    console.error("Error actualizando contacto de ayuda:", error);
+    res.status(500).json({ error: "Error actualizando contacto" });
+  }
+});
+
+router.delete("/contactos/:id", allowRoles("Admin"), async (req, res) => {
+  try {
+    const eliminados = await db("ayuda_contactos")
+      .where({ id: req.params.id })
+      .del();
+
+    if (!eliminados) {
+      return res.status(404).json({ error: "Contacto no encontrado" });
+    }
+
+    res.json({ ok: true });
+  } catch (error) {
+    console.error("Error eliminando contacto de ayuda:", error);
+    res.status(500).json({ error: "Error eliminando contacto" });
+  }
+});
+
 export default router;
