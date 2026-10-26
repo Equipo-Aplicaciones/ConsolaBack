@@ -2,8 +2,21 @@ import express from "express";
 import sql from "mssql";
 import mgmtDb from "../db/adminDb.js";
 import { getConnectionById, makeMssqlConfig } from "../db/connections.js";
+import { allowRoles } from "../middleware/roleMiddleware.js";
 
 const router = express.Router();
+
+// Roles que se pueden habilitar para ejecutar una consulta (Admin siempre puede)
+const ROLES_EJECUTAN_VALIDOS = ["N1", "N2"];
+
+function normalizarRolesEjecutan(valor) {
+  return Array.isArray(valor)
+    ? [...new Set(valor.filter((rol) => ROLES_EJECUTAN_VALIDOS.includes(rol)))]
+    : [];
+}
+
+const accionDe = (texto) =>
+  String(texto || "").trim().split(/\s+/)[0]?.toUpperCase() || "";
 
 const ACCIONES_PERMITIDAS = ["SELECT", "UPDATE", "DELETE"];
 
@@ -38,12 +51,30 @@ async function registrarRun({
   });
 }
 
-/* LISTAR */
-router.get("/", async (req, res) => {
+/* LISTAR
+   Admin: todas, completas. N1 / N2: solo las activas que tienen asignadas para ejecutar, sin el SQL
+   (solo su tipo de acción) para que sepan si la consulta modifica datos. */
+router.get("/", allowRoles("Admin", "N1", "N2"), async (req, res) => {
   try {
-    const queries = await mgmtDb("saved_queries")
-      .orderBy("nombre");
-    res.json(queries);
+    const query = mgmtDb("saved_queries").orderBy("nombre");
+
+    if (req.user.role === "Admin") {
+      return res.json(await query);
+    }
+
+    const filas = await query
+      .where("activo", true)
+      .whereRaw("? = ANY(roles_ejecutan)", [req.user.role]);
+
+    res.json(
+      filas.map((q) => ({
+        id: q.id,
+        nombre: q.nombre,
+        descripcion: q.descripcion,
+        activo: q.activo,
+        accion: accionDe(q.sql_text)
+      }))
+    );
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: "Error obteniendo queries." });
@@ -51,7 +82,7 @@ router.get("/", async (req, res) => {
 });
 
 /* OBTENER UNA */
-router.get("/:id", async (req, res) => {
+router.get("/:id", allowRoles("Admin"), async (req, res) => {
   try {
     const query = await mgmtDb("saved_queries")
       .where("id", req.params.id)
@@ -69,7 +100,7 @@ router.get("/:id", async (req, res) => {
 });
 
 /* HISTORIAL DE EJECUCIONES */
-router.get("/:id/runs", async (req, res) => {
+router.get("/:id/runs", allowRoles("Admin"), async (req, res) => {
   try {
     const runs = await mgmtDb("saved_query_runs as r")
       .leftJoin("connections as c", "c.id", "r.connection_id")
@@ -95,9 +126,9 @@ router.get("/:id/runs", async (req, res) => {
 });
 
 /* CREAR */
-router.post("/", async (req, res) => {
+router.post("/", allowRoles("Admin"), async (req, res) => {
   try {
-    const { nombre, descripcion, sql_text, activo } = req.body;
+    const { nombre, descripcion, sql_text, activo, roles_ejecutan } = req.body;
 
     if (!nombre || !sql_text) {
       return res.status(400).json({
@@ -110,7 +141,8 @@ router.post("/", async (req, res) => {
         nombre,
         descripcion: descripcion ?? null,
         sql_text,
-        activo: activo ?? true
+        activo: activo ?? true,
+        roles_ejecutan: normalizarRolesEjecutan(roles_ejecutan)
       })
       .returning("id");
 
@@ -122,9 +154,9 @@ router.post("/", async (req, res) => {
 });
 
 /* EDITAR */
-router.put("/:id", async (req, res) => {
+router.put("/:id", allowRoles("Admin"), async (req, res) => {
   try {
-    const { nombre, descripcion, sql_text, activo } = req.body;
+    const { nombre, descripcion, sql_text, activo, roles_ejecutan } = req.body;
 
     if (!nombre || !sql_text) {
       return res.status(400).json({
@@ -139,6 +171,7 @@ router.put("/:id", async (req, res) => {
         descripcion: descripcion ?? null,
         sql_text,
         activo: activo ?? true,
+        roles_ejecutan: normalizarRolesEjecutan(roles_ejecutan),
         updated_at: new Date()
       });
 
@@ -150,7 +183,7 @@ router.put("/:id", async (req, res) => {
 });
 
 /* ELIMINAR */
-router.delete("/:id", async (req, res) => {
+router.delete("/:id", allowRoles("Admin"), async (req, res) => {
   try {
     await mgmtDb("saved_queries")
       .where("id", req.params.id)
@@ -164,20 +197,40 @@ router.delete("/:id", async (req, res) => {
 });
 
 /* EJECUTAR CONTRA UN LOCAL */
-router.post("/:id/run", async (req, res) => {
-  const { connectionId, sql: sqlText } = req.body;
+router.post("/:id/run", allowRoles("Admin", "N1", "N2"), async (req, res) => {
+  const { connectionId } = req.body;
   const username = req.user?.username;
 
-  if (!connectionId || !sqlText) {
+  if (!connectionId) {
     return res.status(400).json({
-      message: "connectionId y sql son requeridos."
+      message: "connectionId es requerido."
     });
+  }
+
+  // Se ejecuta SIEMPRE el SQL guardado: lo que mande el cliente en el cuerpo no se usa.
+  let guardada;
+
+  try {
+    guardada = await mgmtDb("saved_queries").where("id", req.params.id).first();
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ message: "Error obteniendo la query." });
+  }
+
+  if (!guardada) {
+    return res.status(404).json({ message: "Query no encontrada." });
+  }
+
+  const esAdmin = req.user.role === "Admin";
+
+  if (!esAdmin && (!guardada.activo || !guardada.roles_ejecutan?.includes(req.user.role))) {
+    return res.status(403).json({ message: "No tienes permiso para ejecutar esta query." });
   }
 
   let sqlValidado;
 
   try {
-    sqlValidado = validarSql(sqlText);
+    sqlValidado = validarSql(guardada.sql_text);
   } catch (err) {
     return res.status(400).json({ message: err.message });
   }
