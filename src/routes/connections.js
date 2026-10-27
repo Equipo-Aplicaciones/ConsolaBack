@@ -410,7 +410,7 @@ router.patch("/estado/:id", async (req, res) => {
 });
 
 // ✅ Eliminar
-router.delete("/:id",  async (req, res) => {
+router.delete("/:id", allowRoles("Admin"), async (req, res) => {
   try {
     const anterior = await mgmtDb("connections").where({ id: req.params.id }).first();
 
