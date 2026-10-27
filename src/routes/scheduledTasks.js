@@ -5,8 +5,8 @@ import { allowRoles } from "../middleware/roleMiddleware.js";
 
 const router = express.Router();
 
-// Mismos roles que ven el módulo en Administración; el resto no puede llamar a la API.
-router.use(allowRoles("Admin", "N2"));
+// El módulo de Tareas es solo del Admin; el resto no puede llamar a la API.
+router.use(allowRoles("Admin"));
 
 const CODIGO_ARTICULO = /^\d{1,9}$/;
 
