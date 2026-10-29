@@ -3,7 +3,10 @@ import runScheduledTasks, {
   FASE_MANANA,
   FASE_MEDIODIA
 } from "../services/scheduledTaskRunner.js";
-import { notificarGestionesQueInician } from "../services/gestionesAlertService.js";
+import {
+  notificarGestionesQueInician,
+  enviarCorreoGestionesQueInician
+} from "../services/gestionesAlertService.js";
 
 let ejecutando = false;
 
@@ -62,6 +65,16 @@ async function ejecutarScheduledTasks() {
         );
       } catch (error) {
         console.error(`[CRON PRODUCTOS] Error avisando gestiones que inician: ${error.message}`);
+      }
+
+      try {
+        const correo = await enviarCorreoGestionesQueInician();
+        console.log(
+          `[CRON PRODUCTOS] Correos de gestiones que inician hoy: ${correo.enviados} enviado(s), ` +
+          `${correo.omitidas} sin correo de destinatario, ${correo.errores} con error (de ${correo.gestiones} gestión(es))`
+        );
+      } catch (error) {
+        console.error(`[CRON PRODUCTOS] Error enviando correo de gestiones que inician: ${error.message}`);
       }
     }
 
