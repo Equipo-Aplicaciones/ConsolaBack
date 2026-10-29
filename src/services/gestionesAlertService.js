@@ -51,13 +51,15 @@ export async function notificarGestionesQueInician(db = mgmtDb) {
 }
 
 /* =====================================================
-   CORREO DE GESTIONES QUE INICIAN HOY
+   CORREO DE CADA GESTIÓN QUE INICIA HOY
 ===================================================== */
 
-const TITULO_MARCA_CORREO = "Correo: gestiones que inician hoy";
+const TITULO_MARCA_CORREO = "Correo: gestión inicia hoy";
 
-// Copia por defecto del correo; se puede cambiar con GESTIONES_INICIO_MAIL_CC
+// Copia por defecto de cada correo; se puede cambiar con GESTIONES_INICIO_MAIL_CC
 const COPIA_POR_DEFECTO = "smtp@tarragona.cl";
+
+const EMAIL_VALIDO = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 const escapar = (texto) =>
   String(texto ?? "")
@@ -66,11 +68,12 @@ const escapar = (texto) =>
     .replace(/>/g, "&gt;");
 
 /**
- * Envía UN correo con las gestiones Pendientes cuya fecha de inicio es hoy.
- * Destinatarios: GESTIONES_INICIO_MAIL_TO (separados por coma; p. ej. soporte y mesa de ayuda) y
- * copia a GESTIONES_INICIO_MAIL_CC (por defecto smtp@tarragona.cl).
- * Se envía una sola vez por día: tras enviarlo se deja una marca en `notificaciones` (sin url
- * de campana, no la ve nadie) y una segunda corrida del mismo día no vuelve a enviarlo.
+ * Por cada gestión Pendiente cuya fecha de inicio es hoy, envía un correo a quien la creó y a su
+ * encargado (el campo email de cada usuario; si es la misma persona, uno solo) con copia a
+ * smtp@tarragona.cl (GESTIONES_INICIO_MAIL_CC). Si ninguno de los dos tiene un correo válido, la
+ * gestión se omite y queda registrado en el log.
+ * Cada gestión se avisa una sola vez: tras enviarlo se deja una marca en `notificaciones` (sin url
+ * de campana, no la ve nadie). Si el envío falla no se marca, para poder reintentarlo.
  *
  * `enviar` se puede reemplazar (pruebas); por defecto es el servicio de correo del sistema.
  */
@@ -79,103 +82,113 @@ export async function enviarCorreoGestionesQueInician(
   enviar = null
 ) {
   const hoy = fechaHoySantiago();
-  const para = String(process.env.GESTIONES_INICIO_MAIL_TO || "").trim();
-  const copia = String(process.env.GESTIONES_INICIO_MAIL_CC || COPIA_POR_DEFECTO).trim();
-
-  if (!para) {
-    console.warn(
-      "[GESTIONES] No se envió el correo de inicio: falta GESTIONES_INICIO_MAIL_TO en el .env"
-    );
-    return { enviado: false, motivo: "SIN_DESTINATARIOS" };
-  }
-
-  const yaEnviado = await db("notificaciones")
-    .where({ titulo: TITULO_MARCA_CORREO, contenido: hoy })
-    .first();
-
-  if (yaEnviado) {
-    return { enviado: false, motivo: "YA_ENVIADO" };
-  }
+  const copia = String(process.env.GESTIONES_INICIO_MAIL_CC ?? COPIA_POR_DEFECTO).trim();
 
   const gestiones = await db("gestiones as g")
     .join("estados as e", "e.id", "g.estado_id")
-    .leftJoin("users as u", "u.id", "g.encargado_id")
+    .leftJoin("users as ue", "ue.id", "g.encargado_id")
+    .leftJoin("users as uc", "uc.id", "g.creado_por")
     .leftJoin("gestiones_locales as gl", "gl.gestion_id", "g.id")
     .where("e.codigo", "PENDIENTE")
     .whereRaw("g.fecha_inicio = ?::date", [hoy])
-    .groupBy("g.id", "g.nombre", "g.version", "u.full_name")
+    .groupBy(
+      "g.id",
+      "g.nombre",
+      "g.version",
+      "ue.full_name",
+      "ue.email",
+      "uc.full_name",
+      "uc.email"
+    )
     .select(
       "g.id",
       "g.nombre",
       "g.version",
-      "u.full_name as encargado",
+      "ue.full_name as encargado",
+      "ue.email as encargado_email",
+      "uc.full_name as creador",
+      "uc.email as creador_email",
       db.raw("COUNT(gl.id) AS locales")
     )
     .orderBy("g.id");
 
+  const resumen = { fecha: hoy, gestiones: gestiones.length, enviados: 0, omitidas: 0, errores: 0 };
+
   if (!gestiones.length) {
-    return { enviado: false, motivo: "SIN_GESTIONES" };
+    return resumen;
   }
-
-  const filas = gestiones
-    .map(
-      (g) => `
-        <tr>
-          <td style="padding:6px 10px;border:1px solid #dee2e6">${escapar(g.nombre)}</td>
-          <td style="padding:6px 10px;border:1px solid #dee2e6">${escapar(g.version || "-")}</td>
-          <td style="padding:6px 10px;border:1px solid #dee2e6">${escapar(g.encargado || "Sin encargado")}</td>
-          <td style="padding:6px 10px;border:1px solid #dee2e6;text-align:right">${escapar(g.locales)}</td>
-        </tr>`
-    )
-    .join("");
-
-  const html = `
-    <div style="font-family:Arial,Helvetica,sans-serif;font-size:14px">
-      <h2>Gestiones que inician hoy</h2>
-      <p>
-        Hoy, <strong>${escapar(hoy)}</strong>, está programado el inicio de
-        <strong>${gestiones.length}</strong> gestión(es):
-      </p>
-      <table style="border-collapse:collapse">
-        <thead>
-          <tr style="background:#e9ecef">
-            <th style="padding:6px 10px;border:1px solid #dee2e6;text-align:left">Gestión</th>
-            <th style="padding:6px 10px;border:1px solid #dee2e6;text-align:left">Versión</th>
-            <th style="padding:6px 10px;border:1px solid #dee2e6;text-align:left">Encargado</th>
-            <th style="padding:6px 10px;border:1px solid #dee2e6;text-align:right">Locales</th>
-          </tr>
-        </thead>
-        <tbody>${filas}</tbody>
-      </table>
-      <p>Ingrese a Manager Crack, módulo Gestiones, para revisarlas e iniciarlas.</p>
-      <hr>
-      <small>Este correo fue generado automáticamente por el sistema de administración.</small>
-    </div>
-  `;
 
   const enviador =
     enviar || (await import("./mailService.js")).enviarCorreoAlerta;
 
-  const resultado = await enviador({
-    subject: `Gestiones que inician hoy (${gestiones.length})`,
-    html,
-    to: para,
-    cc: copia,
-    usarCc: Boolean(copia)
-  });
+  for (const g of gestiones) {
+    const contenidoMarca = `gestión #${g.id} · ${hoy}`;
 
-  if (!resultado?.ok) {
-    console.error(`[GESTIONES] No se pudo enviar el correo de inicio: ${resultado?.error}`);
-    return { enviado: false, motivo: "ERROR_ENVIO", error: resultado?.error };
+    const yaEnviado = await db("notificaciones")
+      .where({ titulo: TITULO_MARCA_CORREO, contenido: contenidoMarca })
+      .first();
+
+    if (yaEnviado) {
+      continue;
+    }
+
+    const destinatarios = [
+      ...new Set(
+        [g.creador_email, g.encargado_email]
+          .map((c) => String(c || "").trim().toLowerCase())
+          .filter((c) => EMAIL_VALIDO.test(c))
+      )
+    ];
+
+    if (!destinatarios.length) {
+      console.warn(
+        `[GESTIONES] Gestión #${g.id} "${g.nombre}": ni quien la creó ni el encargado tienen un correo válido; no se envió el aviso`
+      );
+      resumen.omitidas++;
+      continue;
+    }
+
+    const html = `
+      <div style="font-family:Arial,Helvetica,sans-serif;font-size:14px">
+        <h2>La gestión "${escapar(g.nombre)}" inicia hoy</h2>
+        <table style="border-collapse:collapse">
+          <tr><td style="padding:4px 14px 4px 0"><strong>Gestión</strong></td><td>${escapar(g.nombre)}</td></tr>
+          <tr><td style="padding:4px 14px 4px 0"><strong>Versión</strong></td><td>${escapar(g.version || "-")}</td></tr>
+          <tr><td style="padding:4px 14px 4px 0"><strong>Fecha de inicio</strong></td><td>${escapar(hoy)}</td></tr>
+          <tr><td style="padding:4px 14px 4px 0"><strong>Encargado</strong></td><td>${escapar(g.encargado || "Sin encargado")}</td></tr>
+          <tr><td style="padding:4px 14px 4px 0"><strong>Creada por</strong></td><td>${escapar(g.creador || "-")}</td></tr>
+          <tr><td style="padding:4px 14px 4px 0"><strong>Locales</strong></td><td>${escapar(g.locales)}</td></tr>
+        </table>
+        <p>Ingrese a Manager Crack, módulo Gestiones, para iniciarla y dar seguimiento a los locales.</p>
+        <hr>
+        <small>Este correo fue generado automáticamente por el sistema de administración.</small>
+      </div>
+    `;
+
+    const resultado = await enviador({
+      subject: `Gestión inicia hoy: ${g.nombre}`,
+      html,
+      to: destinatarios.join(", "),
+      cc: copia,
+      usarCc: Boolean(copia)
+    });
+
+    if (!resultado?.ok) {
+      console.error(`[GESTIONES] Gestión #${g.id}: no se pudo enviar el correo de inicio: ${resultado?.error}`);
+      resumen.errores++;
+      continue;
+    }
+
+    await db("notificaciones").insert({
+      titulo: TITULO_MARCA_CORREO,
+      contenido: contenidoMarca,
+      leido: true,
+      url: "sistema",
+      created_at: new Date()
+    });
+
+    resumen.enviados++;
   }
 
-  await db("notificaciones").insert({
-    titulo: TITULO_MARCA_CORREO,
-    contenido: hoy,
-    leido: true,
-    url: "sistema",
-    created_at: new Date()
-  });
-
-  return { enviado: true, gestiones: gestiones.length };
+  return resumen;
 }

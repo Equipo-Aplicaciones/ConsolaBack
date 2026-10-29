@@ -70,9 +70,8 @@ async function ejecutarScheduledTasks() {
       try {
         const correo = await enviarCorreoGestionesQueInician();
         console.log(
-          correo.enviado
-            ? `[CRON PRODUCTOS] Correo de gestiones que inician hoy enviado (${correo.gestiones})`
-            : `[CRON PRODUCTOS] Correo de gestiones que inician hoy no enviado: ${correo.motivo}`
+          `[CRON PRODUCTOS] Correos de gestiones que inician hoy: ${correo.enviados} enviado(s), ` +
+          `${correo.omitidas} sin correo de destinatario, ${correo.errores} con error (de ${correo.gestiones} gestión(es))`
         );
       } catch (error) {
         console.error(`[CRON PRODUCTOS] Error enviando correo de gestiones que inician: ${error.message}`);
