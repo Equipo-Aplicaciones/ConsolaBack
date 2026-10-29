@@ -192,3 +192,35 @@ export async function enviarCorreoGestionesQueInician(
 
   return resumen;
 }
+
+/* =====================================================
+   AVISO DE CAMPANA AL ASIGNAR O REASIGNAR UNA GESTIÓN
+===================================================== */
+
+/**
+ * Crea una notificación personal para el nuevo encargado. No avisa si el encargado no cambió
+ * ni si quien asigna se la asigna a sí mismo.
+ */
+export async function notificarGestionAsignada(
+  db = mgmtDb,
+  { gestion, encargadoId, asignadoPorId }
+) {
+  if (!encargadoId || Number(encargadoId) === Number(gestion.encargado_id)) {
+    return { creada: false, motivo: "SIN_CAMBIO" };
+  }
+
+  if (Number(encargadoId) === Number(asignadoPorId)) {
+    return { creada: false, motivo: "AUTOASIGNADA" };
+  }
+
+  await db("notificaciones").insert({
+    titulo: "Gestión asignada",
+    contenido: `Se te asignó la gestión "${gestion.nombre}" (gestión #${gestion.id}).`,
+    leido: false,
+    url: "gestiones",
+    usuario_id: encargadoId,
+    created_at: new Date()
+  });
+
+  return { creada: true };
+}

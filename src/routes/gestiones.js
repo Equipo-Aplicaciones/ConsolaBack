@@ -1,6 +1,7 @@
 import express from "express";
 import multer from "multer";
 import db from "../db/adminDb.js";
+import { notificarGestionAsignada } from "../services/gestionesAlertService.js";
 import { allowRoles } from "../middleware/roleMiddleware.js";
 
 const router = express.Router();
@@ -550,6 +551,17 @@ router.put("/:id/encargado",allowRoles("Admin", "N2"), async (req, res) => {
           updated_at:
             db.fn.now()
         });
+
+      // Aviso de campana al nuevo encargado; si falla, la asignación igual queda hecha
+      try {
+        await notificarGestionAsignada(db, {
+          gestion,
+          encargadoId: usuario.id,
+          asignadoPorId: req.user.id
+        });
+      } catch (errorAviso) {
+        console.error("Error creando aviso de gestión asignada:", errorAviso);
+      }
 
       res.json({
         message:
