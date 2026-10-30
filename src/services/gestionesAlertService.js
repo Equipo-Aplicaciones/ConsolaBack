@@ -63,6 +63,10 @@ const TITULO_MARCA_CORREO = "Correo: gestión inicia hoy";
 // Copia por defecto de cada correo; se puede cambiar con GESTIONES_INICIO_MAIL_CC
 const COPIA_POR_DEFECTO = "smtp@tarragona.cl";
 
+// Usuario interno (Mesa de Ayuda) cuyo email recibe siempre el aviso; se puede cambiar con
+// GESTIONES_USUARIO_CORREO
+const USUARIO_CORREO_POR_DEFECTO = "mesaDA";
+
 const EMAIL_VALIDO = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 const escapar = (texto) =>
@@ -72,9 +76,10 @@ const escapar = (texto) =>
     .replace(/>/g, "&gt;");
 
 /**
- * Por cada gestión Pendiente cuya fecha de inicio es hoy, envía un correo a quien la creó (el campo
- * email del usuario) con copia a smtp@tarragona.cl (GESTIONES_INICIO_MAIL_CC). Si quien la creó no
- * tiene un correo válido, la gestión se omite y queda registrado en el log.
+ * Por cada gestión Pendiente cuya fecha de inicio es hoy, envía un correo a quien la creó y al usuario
+ * interno de Mesa de Ayuda (mesaDA, GESTIONES_USUARIO_CORREO), tomando el campo email de cada usuario,
+ * con copia a smtp@tarragona.cl (GESTIONES_INICIO_MAIL_CC). Si ninguno tiene un correo válido, la
+ * gestión se omite y queda registrado en el log.
  * Los usuarios del perfil asignado se enteran por la campana, no por correo.
  * Cada gestión se avisa una sola vez: tras enviarlo se deja una marca en `notificaciones` (sin url
  * de campana, no la ve nadie). Si el envío falla no se marca, para poder reintentarlo.
@@ -122,6 +127,25 @@ export async function enviarCorreoGestionesQueInician(
   const enviador =
     enviar || (await import("./mailService.js")).enviarCorreoAlerta;
 
+  const usuarioCorreo = String(
+    process.env.GESTIONES_USUARIO_CORREO ?? USUARIO_CORREO_POR_DEFECTO
+  ).trim();
+
+  const correoInterno = usuarioCorreo
+    ? (
+        await db("users")
+          .whereRaw("lower(username) = lower(?)", [usuarioCorreo])
+          .select("email")
+          .first()
+      )?.email
+    : null;
+
+  if (usuarioCorreo && !EMAIL_VALIDO.test(String(correoInterno || "").trim())) {
+    console.warn(
+      `[GESTIONES] El usuario "${usuarioCorreo}" no existe o no tiene un correo válido; el aviso de inicio no le llegará`
+    );
+  }
+
   for (const g of gestiones) {
     const contenidoMarca = `gestión #${g.id} · ${hoy}`;
 
@@ -135,7 +159,7 @@ export async function enviarCorreoGestionesQueInician(
 
     const destinatarios = [
       ...new Set(
-        [g.creador_email]
+        [g.creador_email, correoInterno]
           .map((c) => String(c || "").trim().toLowerCase())
           .filter((c) => EMAIL_VALIDO.test(c))
       )
@@ -143,7 +167,7 @@ export async function enviarCorreoGestionesQueInician(
 
     if (!destinatarios.length) {
       console.warn(
-        `[GESTIONES] Gestión #${g.id} "${g.nombre}": quien la creó no tiene un correo válido; no se envió el aviso`
+        `[GESTIONES] Gestión #${g.id} "${g.nombre}": ni quien la creó ni ${usuarioCorreo || "el usuario interno"} tienen un correo válido; no se envió el aviso`
       );
       resumen.omitidas++;
       continue;
