@@ -63,9 +63,12 @@ const TITULO_MARCA_CORREO = "Correo: gestión inicia hoy";
 // Copia por defecto de cada correo; se puede cambiar con GESTIONES_INICIO_MAIL_CC
 const COPIA_POR_DEFECTO = "smtp@tarragona.cl";
 
-// Usuarios internos (Mesa de Ayuda y Soporte N2) cuyo email recibe siempre el aviso; se puede
-// cambiar con GESTIONES_USUARIO_CORREO (nombres de usuario separados por coma)
-const USUARIOS_CORREO_POR_DEFECTO = "mesaDA,SoporteN2";
+// Usuario "padre" de cada perfil: su email es el que recibe los avisos de las gestiones asignadas
+// a ese perfil, así no se escribe a cada usuario N1 o N2 por separado. Admin no tiene.
+const USUARIO_PADRE_POR_PERFIL = {
+  N1: "mesaDA",
+  N2: "SoporteN2"
+};
 
 const EMAIL_VALIDO = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -76,11 +79,11 @@ const escapar = (texto) =>
     .replace(/>/g, "&gt;");
 
 /**
- * Por cada gestión Pendiente cuya fecha de inicio es hoy, envía un correo a quien la creó y a los
- * usuarios internos mesaDA y SoporteN2 (GESTIONES_USUARIO_CORREO), tomando el campo email de cada
- * usuario, con copia a smtp@tarragona.cl (GESTIONES_INICIO_MAIL_CC). Si ninguno tiene un correo
- * válido, la gestión se omite y queda registrado en el log.
- * Los usuarios del perfil asignado se enteran por la campana, no por correo.
+ * Por cada gestión Pendiente cuya fecha de inicio es hoy, envía un correo a quien la creó y al usuario
+ * padre del perfil asignado (N1 → mesaDA, N2 → SoporteN2), tomando el campo email de cada usuario,
+ * con copia a smtp@tarragona.cl (GESTIONES_INICIO_MAIL_CC). Si ninguno tiene un correo válido, la
+ * gestión se omite y queda registrado en el log.
+ * Los demás usuarios del perfil se enteran por la campana, no por correo.
  * Cada gestión se avisa una sola vez: tras enviarlo se deja una marca en `notificaciones` (sin url
  * de campana, no la ve nadie). Si el envío falla no se marca, para poder reintentarlo.
  *
@@ -127,26 +130,26 @@ export async function enviarCorreoGestionesQueInician(
   const enviador =
     enviar || (await import("./mailService.js")).enviarCorreoAlerta;
 
-  const usuariosCorreo = String(
-    process.env.GESTIONES_USUARIO_CORREO ?? USUARIOS_CORREO_POR_DEFECTO
-  )
-    .split(",")
-    .map((u) => u.trim().toLowerCase())
-    .filter(Boolean);
+  // Email de cada usuario padre, por perfil (solo los de los perfiles que hacen falta)
+  const correoPadrePorPerfil = {};
 
-  const correosInternos = [];
+  for (const perfil of new Set(gestiones.map((g) => g.perfil_asignado))) {
+    const usuarioPadre = USUARIO_PADRE_POR_PERFIL[perfil];
 
-  for (const usuarioCorreo of usuariosCorreo) {
+    if (!usuarioPadre) {
+      continue;
+    }
+
     const fila = await db("users")
-      .whereRaw("lower(username) = ?", [usuarioCorreo])
+      .whereRaw("lower(username) = lower(?)", [usuarioPadre])
       .select("email")
       .first();
 
     if (EMAIL_VALIDO.test(String(fila?.email || "").trim())) {
-      correosInternos.push(fila.email);
+      correoPadrePorPerfil[perfil] = fila.email;
     } else {
       console.warn(
-        `[GESTIONES] El usuario "${usuarioCorreo}" no existe o no tiene un correo válido; el aviso de inicio no le llegará`
+        `[GESTIONES] El usuario "${usuarioPadre}" (perfil ${perfil}) no existe o no tiene un correo válido; no recibirá el aviso de inicio`
       );
     }
   }
@@ -164,7 +167,7 @@ export async function enviarCorreoGestionesQueInician(
 
     const destinatarios = [
       ...new Set(
-        [g.creador_email, ...correosInternos]
+        [g.creador_email, correoPadrePorPerfil[g.perfil_asignado]]
           .map((c) => String(c || "").trim().toLowerCase())
           .filter((c) => EMAIL_VALIDO.test(c))
       )
@@ -172,7 +175,7 @@ export async function enviarCorreoGestionesQueInician(
 
     if (!destinatarios.length) {
       console.warn(
-        `[GESTIONES] Gestión #${g.id} "${g.nombre}": ni quien la creó ni los usuarios internos tienen un correo válido; no se envió el aviso`
+        `[GESTIONES] Gestión #${g.id} "${g.nombre}": ni quien la creó ni el usuario padre del perfil tienen un correo válido; no se envió el aviso`
       );
       resumen.omitidas++;
       continue;
