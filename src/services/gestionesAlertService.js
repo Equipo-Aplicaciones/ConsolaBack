@@ -8,43 +8,47 @@ function fechaHoySantiago() {
 }
 
 /**
- * Avisa a cada encargado, con una notificación personal en la campana, de las gestiones
- * Pendientes cuya fecha de inicio es hoy. Si ya se avisó hoy de esa gestión no la repite.
+ * Avisa a cada usuario del perfil asignado, con una notificación personal en la campana, de las
+ * gestiones Pendientes cuya fecha de inicio es hoy. Si ya se le avisó hoy de esa gestión no la repite.
  */
 export async function notificarGestionesQueInician(db = mgmtDb) {
   const hoy = fechaHoySantiago();
 
   const gestiones = await db("gestiones as g")
     .join("estados as e", "e.id", "g.estado_id")
-    .whereNotNull("g.encargado_id")
+    .whereNotNull("g.perfil_asignado")
     .where("e.codigo", "PENDIENTE")
     .whereRaw("g.fecha_inicio = ?::date", [hoy])
-    .select("g.id", "g.nombre", "g.encargado_id");
+    .select("g.id", "g.nombre", "g.perfil_asignado");
 
   let creadas = 0;
 
   for (const gestion of gestiones) {
-    const contenido = `${gestion.nombre} (gestión #${gestion.id}) comienza hoy y estás a cargo de ella.`;
+    const contenido = `${gestion.nombre} (gestión #${gestion.id}) comienza hoy y está asignada a tu perfil.`;
 
-    const yaAvisada = await db("notificaciones")
-      .where({ usuario_id: gestion.encargado_id, titulo: TITULO, contenido })
-      .whereRaw("(created_at AT TIME ZONE 'America/Santiago')::date = ?::date", [hoy])
-      .first();
+    const usuarios = await db("users").where({ role: gestion.perfil_asignado }).select("id");
 
-    if (yaAvisada) {
-      continue;
+    for (const usuario of usuarios) {
+      const yaAvisado = await db("notificaciones")
+        .where({ usuario_id: usuario.id, titulo: TITULO, contenido })
+        .whereRaw("(created_at AT TIME ZONE 'America/Santiago')::date = ?::date", [hoy])
+        .first();
+
+      if (yaAvisado) {
+        continue;
+      }
+
+      await db("notificaciones").insert({
+        titulo: TITULO,
+        contenido,
+        leido: false,
+        url: "gestiones",
+        usuario_id: usuario.id,
+        created_at: new Date()
+      });
+
+      creadas++;
     }
-
-    await db("notificaciones").insert({
-      titulo: TITULO,
-      contenido,
-      leido: false,
-      url: "gestiones",
-      usuario_id: gestion.encargado_id,
-      created_at: new Date()
-    });
-
-    creadas++;
   }
 
   return { fecha: hoy, gestiones: gestiones.length, notificaciones: creadas };
@@ -68,10 +72,10 @@ const escapar = (texto) =>
     .replace(/>/g, "&gt;");
 
 /**
- * Por cada gestión Pendiente cuya fecha de inicio es hoy, envía un correo a quien la creó y a su
- * encargado (el campo email de cada usuario; si es la misma persona, uno solo) con copia a
- * smtp@tarragona.cl (GESTIONES_INICIO_MAIL_CC). Si ninguno de los dos tiene un correo válido, la
- * gestión se omite y queda registrado en el log.
+ * Por cada gestión Pendiente cuya fecha de inicio es hoy, envía un correo a quien la creó (el campo
+ * email del usuario) con copia a smtp@tarragona.cl (GESTIONES_INICIO_MAIL_CC). Si quien la creó no
+ * tiene un correo válido, la gestión se omite y queda registrado en el log.
+ * Los usuarios del perfil asignado se enteran por la campana, no por correo.
  * Cada gestión se avisa una sola vez: tras enviarlo se deja una marca en `notificaciones` (sin url
  * de campana, no la ve nadie). Si el envío falla no se marca, para poder reintentarlo.
  *
@@ -86,7 +90,6 @@ export async function enviarCorreoGestionesQueInician(
 
   const gestiones = await db("gestiones as g")
     .join("estados as e", "e.id", "g.estado_id")
-    .leftJoin("users as ue", "ue.id", "g.encargado_id")
     .leftJoin("users as uc", "uc.id", "g.creado_por")
     .leftJoin("gestiones_locales as gl", "gl.gestion_id", "g.id")
     .where("e.codigo", "PENDIENTE")
@@ -95,8 +98,7 @@ export async function enviarCorreoGestionesQueInician(
       "g.id",
       "g.nombre",
       "g.version",
-      "ue.full_name",
-      "ue.email",
+      "g.perfil_asignado",
       "uc.full_name",
       "uc.email"
     )
@@ -104,8 +106,7 @@ export async function enviarCorreoGestionesQueInician(
       "g.id",
       "g.nombre",
       "g.version",
-      "ue.full_name as encargado",
-      "ue.email as encargado_email",
+      "g.perfil_asignado",
       "uc.full_name as creador",
       "uc.email as creador_email",
       db.raw("COUNT(gl.id) AS locales")
@@ -134,7 +135,7 @@ export async function enviarCorreoGestionesQueInician(
 
     const destinatarios = [
       ...new Set(
-        [g.creador_email, g.encargado_email]
+        [g.creador_email]
           .map((c) => String(c || "").trim().toLowerCase())
           .filter((c) => EMAIL_VALIDO.test(c))
       )
@@ -142,7 +143,7 @@ export async function enviarCorreoGestionesQueInician(
 
     if (!destinatarios.length) {
       console.warn(
-        `[GESTIONES] Gestión #${g.id} "${g.nombre}": ni quien la creó ni el encargado tienen un correo válido; no se envió el aviso`
+        `[GESTIONES] Gestión #${g.id} "${g.nombre}": quien la creó no tiene un correo válido; no se envió el aviso`
       );
       resumen.omitidas++;
       continue;
@@ -155,7 +156,7 @@ export async function enviarCorreoGestionesQueInician(
           <tr><td style="padding:4px 14px 4px 0"><strong>Gestión</strong></td><td>${escapar(g.nombre)}</td></tr>
           <tr><td style="padding:4px 14px 4px 0"><strong>Versión</strong></td><td>${escapar(g.version || "-")}</td></tr>
           <tr><td style="padding:4px 14px 4px 0"><strong>Fecha de inicio</strong></td><td>${escapar(hoy)}</td></tr>
-          <tr><td style="padding:4px 14px 4px 0"><strong>Encargado</strong></td><td>${escapar(g.encargado || "Sin encargado")}</td></tr>
+          <tr><td style="padding:4px 14px 4px 0"><strong>Asignada a</strong></td><td>${escapar(g.perfil_asignado ? `Perfil ${g.perfil_asignado}` : "Sin asignar")}</td></tr>
           <tr><td style="padding:4px 14px 4px 0"><strong>Creada por</strong></td><td>${escapar(g.creador || "-")}</td></tr>
           <tr><td style="padding:4px 14px 4px 0"><strong>Locales</strong></td><td>${escapar(g.locales)}</td></tr>
         </table>
@@ -198,29 +199,37 @@ export async function enviarCorreoGestionesQueInician(
 ===================================================== */
 
 /**
- * Crea una notificación personal para el nuevo encargado. No avisa si el encargado no cambió
- * ni si quien asigna se la asigna a sí mismo.
+ * Crea una notificación personal para cada usuario del perfil al que se asigna la gestión, salvo
+ * quien hace la asignación. No avisa si el perfil no cambió.
+ * `gestion` es la fila antes de actualizar (trae el perfil anterior).
  */
 export async function notificarGestionAsignada(
   db = mgmtDb,
-  { gestion, encargadoId, asignadoPorId }
+  { gestion, perfil, asignadoPorId }
 ) {
-  if (!encargadoId || Number(encargadoId) === Number(gestion.encargado_id)) {
-    return { creada: false, motivo: "SIN_CAMBIO" };
+  if (!perfil || perfil === gestion.perfil_asignado) {
+    return { creadas: 0, motivo: "SIN_CAMBIO" };
   }
 
-  if (Number(encargadoId) === Number(asignadoPorId)) {
-    return { creada: false, motivo: "AUTOASIGNADA" };
+  const usuarios = await db("users")
+    .where({ role: perfil })
+    .whereNot({ id: asignadoPorId })
+    .select("id");
+
+  if (!usuarios.length) {
+    return { creadas: 0, motivo: "SIN_USUARIOS" };
   }
 
-  await db("notificaciones").insert({
-    titulo: "Gestión asignada",
-    contenido: `Se te asignó la gestión "${gestion.nombre}" (gestión #${gestion.id}).`,
-    leido: false,
-    url: "gestiones",
-    usuario_id: encargadoId,
-    created_at: new Date()
-  });
+  await db("notificaciones").insert(
+    usuarios.map((usuario) => ({
+      titulo: "Gestión asignada",
+      contenido: `Se asignó a tu perfil (${perfil}) la gestión "${gestion.nombre}" (gestión #${gestion.id}).`,
+      leido: false,
+      url: "gestiones",
+      usuario_id: usuario.id,
+      created_at: new Date()
+    }))
+  );
 
-  return { creada: true };
+  return { creadas: usuarios.length };
 }
