@@ -6,6 +6,9 @@ import { allowRoles } from "../middleware/roleMiddleware.js";
 
 const router = express.Router();
 
+// Perfiles a los que se puede asignar una gestión
+const PERFILES_ASIGNABLES = ["N1", "N2", "Admin"];
+
 /* =========================================================
    HELPERS
 ========================================================= */
@@ -18,8 +21,8 @@ async function obtenerEstado(grupo, codigo, trx = db) {
 
 /* Quién ve qué gestiones:
    - Admin: todas.
-   - N2: solo las que creó o que le asignaron.
-   - N1: solo las que le asignaron (no puede crear).
+   - N2: solo las que creó o las asignadas al perfil N2.
+   - N1: solo las asignadas al perfil N1 (no puede crear).
    `alias` es el alias de la tabla gestiones en la consulta, si lo tiene. */
 function restringirPorRol(query, user, alias = "") {
   const col = (c) => (alias ? `${alias}.${c}` : c);
@@ -30,11 +33,11 @@ function restringirPorRol(query, user, alias = "") {
 
   if (user.role === "N2") {
     return query.where(function () {
-      this.where(col("creado_por"), user.id).orWhere(col("encargado_id"), user.id);
+      this.where(col("creado_por"), user.id).orWhere(col("perfil_asignado"), user.role);
     });
   }
 
-  return query.where(col("encargado_id"), user.id);
+  return query.where(col("perfil_asignado"), user.role);
 }
 
 async function obtenerGestionPermitida(id, user, trx = db) {
@@ -49,7 +52,7 @@ async function obtenerGestionPermitida(id, user, trx = db) {
    - Ven todas las gestiones.
 
    N1:
-   - Solo ve las gestiones donde es encargado.
+   - Solo ve las gestiones asignadas al perfil N1.
 
    Filtros:
    ?estado=PENDIENTE (o varios: ?estado=PENDIENTE,SUSPENDIDA)
@@ -66,7 +69,6 @@ router.get("/", allowRoles("Admin", "N1", "N2"),async (req, res) => {
       const query = db("gestiones as g")
         .leftJoin("estados as e", "e.id", "g.estado_id")
         .leftJoin("users as u", "u.id", "g.creado_por")
-        .leftJoin("users as ue", "ue.id","g.encargado_id")
         .select(
           "g.id",
           "g.nombre",
@@ -81,8 +83,7 @@ router.get("/", allowRoles("Admin", "N1", "N2"),async (req, res) => {
           "g.suspendida_at",
           "g.creado_por",
           "u.full_name as creado_por_nombre",
-          "g.encargado_id",
-          "ue.full_name as encargado_nombre",
+          "g.perfil_asignado",
           "g.created_at",
           "g.updated_at")
         .orderBy( "g.fecha_inicio", "desc" )
@@ -427,80 +428,30 @@ router.get("/", allowRoles("Admin", "N1", "N2"),async (req, res) => {
 );
 
 /* =========================================================
-   GET /gestiones/usuarios/encargados
+   PUT /gestiones/:id/perfil
 
    Solo Admin y N2.
 
-   Devuelve usuarios N1, N2 y Admin disponibles
-   para ser asignados como encargados.
-========================================================= */
-
-router.get("/usuarios/encargados",allowRoles("Admin","N2"),async (req, res) => {
-    try {
-      const usuarios =
-        await db("users")
-          .select(
-            "id",
-            "full_name",
-            "role"
-          )
-          .whereIn(
-            "role",
-            ["N1", "N2", "Admin"]
-          )
-          .orderBy(
-            "full_name",
-            "asc"
-          );
-
-      res.json(
-        usuarios
-      );
-
-    } catch (error) {
-      console.error(
-        "Error obteniendo encargados:",
-        error
-      );
-
-      res
-        .status(500)
-        .json({
-          error:
-            "Error obteniendo usuarios encargados"
-        });
-    }
-  }
-);
-
-/* =========================================================
-   PUT /gestiones/:id/encargado
-
-   Solo Admin y N2.
+   Asigna la gestión a un perfil: todos los usuarios de ese
+   perfil la ven y la operan.
 
    BODY:
    {
-     encargado_id: 10
+     perfil: "N1"
    }
 ========================================================= */
 
-router.put("/:id/encargado",allowRoles("Admin", "N2"), async (req, res) => {
+router.put("/:id/perfil", allowRoles("Admin", "N2"), async (req, res) => {
     try {
-      const { id } =
-        req.params;
+      const { id } = req.params;
+      const perfil = String(req.body?.perfil ?? "").trim();
 
-      const {
-        encargado_id
-      } = req.body;
-
-      if (
-        !encargado_id
-      ) {
+      if (!PERFILES_ASIGNABLES.includes(perfil)) {
         return res
           .status(400)
           .json({
             error:
-              "Debe seleccionar un encargado"
+              "Debe seleccionar un perfil válido"
           });
       }
 
@@ -516,47 +467,18 @@ router.put("/:id/encargado",allowRoles("Admin", "N2"), async (req, res) => {
           });
       }
 
-      const usuario =
-        await db(
-          "users"
-        )
-          .where(
-            "id",
-            encargado_id
-          )
-          .whereIn(
-            "role",
-            ["N1", "N2", "Admin"]
-          )
-          .first();
-
-      if (!usuario) {
-        return res
-          .status(400)
-          .json({
-            error:
-              "El encargado seleccionado no es válido"
-          });
-      }
-
-      await db(
-        "gestiones"
-      )
-        .where({
-          id
-        })
+      await db("gestiones")
+        .where({ id })
         .update({
-          encargado_id:
-            usuario.id,
-          updated_at:
-            db.fn.now()
+          perfil_asignado: perfil,
+          updated_at: db.fn.now()
         });
 
-      // Aviso de campana al nuevo encargado; si falla, la asignación igual queda hecha
+      // Aviso de campana a los usuarios del perfil; si falla, la asignación igual queda hecha
       try {
         await notificarGestionAsignada(db, {
           gestion,
-          encargadoId: usuario.id,
+          perfil,
           asignadoPorId: req.user.id
         });
       } catch (errorAviso) {
@@ -565,16 +487,14 @@ router.put("/:id/encargado",allowRoles("Admin", "N2"), async (req, res) => {
 
       res.json({
         message:
-          "Encargado asignado correctamente",
-        encargado_id:
-          usuario.id,
-        encargado_nombre:
-          usuario.full_name
+          "Gestión asignada correctamente",
+        perfil_asignado:
+          perfil
       });
 
     } catch (error) {
       console.error(
-        "Error asignando encargado:",
+        "Error asignando perfil:",
         error
       );
 
@@ -582,7 +502,7 @@ router.put("/:id/encargado",allowRoles("Admin", "N2"), async (req, res) => {
         .status(500)
         .json({
           error:
-            "Error asignando encargado"
+            "Error asignando perfil"
         });
     }
   }
@@ -592,12 +512,9 @@ router.put("/:id/encargado",allowRoles("Admin", "N2"), async (req, res) => {
    GET /gestiones/:id
    DETALLE DE UNA GESTIÓN
 
-   Admin / N2:
-   - Pueden consultar cualquiera.
-
-   N1:
-   - Solo puede consultar una gestión
-     si es su encargado.
+   Admin: cualquiera.
+   N2: las que creó o las asignadas a su perfil.
+   N1: las asignadas a su perfil.
 ========================================================= */
 
 router.get("/:id", allowRoles("Admin", "N1", "N2"),async (req, res) => {
@@ -619,11 +536,6 @@ router.get("/:id", allowRoles("Admin", "N1", "N2"),async (req, res) => {
             "u.id",
             "g.creado_por"
           )
-          .leftJoin(
-            "users as ue",
-            "ue.id",
-            "g.encargado_id"
-          )
           .select(
             "g.id",
             "g.nombre",
@@ -638,8 +550,7 @@ router.get("/:id", allowRoles("Admin", "N1", "N2"),async (req, res) => {
             "g.suspendida_at",
             "g.creado_por",
             "u.full_name as creado_por_nombre",
-            "g.encargado_id",
-            "ue.full_name as encargado_nombre",
+            "g.perfil_asignado",
             "g.created_at",
             "g.updated_at"
           )
@@ -2040,7 +1951,7 @@ router.post(
    INSTRUCTIVOS (PDF) DE UNA GESTIÓN
 
    Admin / N2: listar, subir y eliminar.
-   N1: listar y ver, solo si es encargado de la gestión.
+   N1: listar y ver, solo si la gestión está asignada a su perfil.
 ========================================================= */
 
 const MAX_INSTRUCTIVO_BYTES = 10 * 1024 * 1024;
