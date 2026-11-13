@@ -7,6 +7,7 @@ import {
   notificarGestionesQueInician,
   enviarCorreoGestionesQueInician
 } from "../services/gestionesAlertService.js";
+import { notificarEfectivoEnMesas } from "../services/auditoriaBoletasService.js";
 
 let ejecutando = false;
 
@@ -75,6 +76,17 @@ async function ejecutarScheduledTasks() {
         );
       } catch (error) {
         console.error(`[CRON PRODUCTOS] Error enviando correo de gestiones que inician: ${error.message}`);
+      }
+
+      // Efectivo en las mesas 500-599 del día anterior (no debería haber): aviso a los Admin
+      try {
+        const efectivo = await notificarEfectivoEnMesas();
+        console.log(
+          `[CRON PRODUCTOS] Efectivo en mesas 500-599 (${efectivo.fecha}): ${efectivo.boletas} boleta(s) en ` +
+          `${efectivo.locales} local(es), avisos creados: ${efectivo.notificaciones}`
+        );
+      } catch (error) {
+        console.error(`[CRON PRODUCTOS] Error revisando efectivo en mesas 500-599: ${error.message}`);
       }
     }
 
